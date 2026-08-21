@@ -19,6 +19,10 @@ export default function ViewManifest() {
     fetchAllManifests();
   }, []);
 
+  const toUpperCase = (value) => {
+    return value ? value.toUpperCase() : '';
+  };
+
   const fetchAllManifests = async () => {
     try {
       const res = await api.get('/manifests');
@@ -101,20 +105,37 @@ export default function ViewManifest() {
     window.print();
   };
 
+  // ========== UPDATED PRINT RECEIPT FUNCTION - Same as Manifest Manager ==========
   const printReceipt = (shipment) => {
     const receiptWindow = window.open('', '_blank', 'width=302,height=600');
+
+    if (!receiptWindow) {
+      toast.error('Please allow popups for this site');
+      return;
+    }
 
     const dateStr = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
     const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
 
-    const itemsRows = shipment.items.map((item, idx) => `
-      <tr>
-        <td class="c">${idx + 1}</td>
-        <td class="name">${item.name}</td>
-        <td class="c">${item.qty}</td>
-        <td class="r">${item.total.toLocaleString()}</td>
-      </tr>
+    // Each shipment item gets its OWN row
+    const itemsRows = shipment.items.map((item) => `
+      <div class="item-row">
+        <div class="item-name">${toUpperCase(item.name)}</div>
+        <div class="item-values">
+          <span class="qty">QTY: ${item.qty}</span>
+        </div>
+      </div>
     `).join('');
+
+    // Format phone numbers - split by comma or new line
+    const formatPhoneNumbers = (phoneStr) => {
+      if (!phoneStr) return '<div class="contact-line">—</div>';
+      const numbers = phoneStr.split(/[,;\n]/).map(p => p.trim()).filter(p => p);
+      if (numbers.length === 0) return '<div class="contact-line">—</div>';
+      return numbers.map(num => `<div class="contact-line">${num}</div>`).join('');
+    };
+
+    const contactLines = companyPhone ? formatPhoneNumbers(companyPhone) : '<div class="contact-line">—</div>';
 
     const receiptHtml = `
       <!DOCTYPE html>
@@ -127,82 +148,106 @@ export default function ViewManifest() {
           html, body { width: 58mm; }
           body {
             font-family: 'Courier New', Consolas, monospace;
-            font-size: 11px;
-            font-weight: 400;
-            color: #111;
-            padding: 2mm 3mm;
+            font-size: 14px;
+            font-weight: 700;
+            color: #000;
+            padding: 3mm 3mm;
+            line-height: 1.5;
           }
           .center { text-align: center; }
           .right { text-align: right; }
-          .company { font-size: 14px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; }
-          .meta { font-size: 9px; color: #555; margin-top: 2px; font-weight: 400; }
-          .divider { border-top: 1px dashed #999; margin: 5px 0; }
-          .divider.solid { border-top: 1px solid #333; }
-          .row { display: flex; justify-content: space-between; font-size: 10.5px; padding: 1.5px 0; font-weight: 400; }
-          .row span:first-child { color: #444; }
-          .row .value { font-weight: 500; text-align: right; max-width: 65%; color: #111; }
-          table { width: 100%; border-collapse: collapse; margin-top: 2px; font-size: 10px; }
-          thead th { border-bottom: 1px solid #333; padding: 2px 0; font-size: 9px; text-transform: uppercase; text-align: left; font-weight: 600; color: #444; }
-          thead th.c, td.c { text-align: center; }
-          thead th.r, td.r { text-align: right; }
-          tbody td { padding: 2px 0; vertical-align: top; font-weight: 400; }
-          tbody tr td.name { font-weight: 500; }
-          tfoot td { padding-top: 4px; font-weight: 600; font-size: 12px; border-top: 1px solid #333; }
-          .payment-line { display: flex; justify-content: center; margin: 6px 0 2px; }
-          .payment-badge { border: 1px solid #333; padding: 2px 10px; font-size: 9px; font-weight: 600; letter-spacing: 0.5px; }
-          .footer { text-align: center; margin-top: 6px; }
-          .footer .thanks { font-size: 10.5px; font-weight: 600; }
-          .footer .phone { font-size: 10px; margin-top: 2px; font-weight: 400; }
-          .footer .copy { font-size: 8px; color: #888; margin-top: 4px; font-weight: 400; }
+          .company { font-size: 20px; font-weight: 800; letter-spacing: 0.5px; text-transform: uppercase; }
+          .subtitle { font-size: 16px; font-weight: 800; text-transform: uppercase; margin-top: 2px; }
+          .meta { font-size: 11px; font-weight: 600; color: #333; margin-top: 3px; }
+          .divider-eq { margin: 8px 0; font-size: 12px; font-weight: 700; letter-spacing: 1px; white-space: nowrap; overflow: hidden; }
+          .divider-dash { border-top: 1.5px dashed #000; margin: 8px 0; }
+          .divider-solid { border-top: 2px solid #000; margin: 8px 0; }
+          .line { font-size: 14px; font-weight: 700; text-transform: uppercase; padding: 2px 0; word-break: break-word; }
+
+          .items-block { margin-top: 4px; }
+          .item-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            font-size: 14px;
+            font-weight: 700;
+            text-transform: uppercase;
+            padding: 5px 0;
+            border-bottom: 1px dashed #999;
+          }
+          .item-row:last-child { border-bottom: none; }
+          .item-name { flex: 1; padding-right: 8px; }
+          .item-values { text-align: right; white-space: nowrap; }
+          .item-values .qty { display: block; font-size: 14px; font-weight: 800; }
+
+          .status-line {
+            display: flex;
+            justify-content: space-between;
+            margin: 10px 0 4px;
+            font-size: 14px;
+            font-weight: 800;
+            text-transform: uppercase;
+          }
+          .status-label {
+            font-weight: 800;
+          }
+          .status-value {
+            font-weight: 800;
+          }
+
+          .contact-block { margin-top: 4px; }
+          .contact-title { font-size: 13px; font-weight: 800; text-transform: uppercase; }
+          .contact-line { font-size: 13px; font-weight: 700; padding: 2px 0; }
+
+          .footer { text-align: center; margin-top: 10px; }
+          .footer .thanks { font-size: 14px; font-weight: 800; }
+          .footer .copy { font-size: 10px; font-weight: 600; color: #444; margin-top: 5px; }
         </style>
       </head>
       <body>
         <div class="center">
-          <div class="company">${companyName || 'Manifest System'}</div>
+          <div class="company">${toUpperCase(companyName || 'Manifest System')}</div>
+          <div class="subtitle">Way Bill</div>
           <div class="meta">${dateStr} • ${timeStr}</div>
         </div>
 
-        <div class="divider solid"></div>
+        <div class="divider-eq">====================</div>
 
-        <div class="row"><span>Truck</span><span class="value">${manifest?.truckPlate || '—'}</span></div>
-        <div class="row"><span>Driver</span><span class="value">${manifest?.driverName || '—'}</span></div>
-        <div class="row"><span>Customer</span><span class="value">${shipment.customer || '—'}</span></div>
-        <div class="row"><span>Destination</span><span class="value">${shipment.destination || '—'}</span></div>
-        ${shipment.phone ? `<div class="row"><span>Phone</span><span class="value">${shipment.phone}</span></div>` : ''}
+        <div class="line">Truck: ${toUpperCase(manifest?.truckPlate || '—')}</div>
+        <div class="line">Driver: ${toUpperCase(manifest?.driverName || '—')}</div>
+        <div class="line">Sender: ${toUpperCase(shipment.sender) || '—'}</div>
 
-        <div class="divider"></div>
+        <div class="divider-dash"></div>
 
-        <table>
-          <thead>
-            <tr>
-              <th class="c" style="width:10%;">#</th>
-              <th style="width:50%;">Item</th>
-              <th class="c" style="width:15%;">Qty</th>
-              <th class="r" style="width:25%;">Amt</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${itemsRows}
-          </tbody>
-          <tfoot>
-            <tr>
-              <td colspan="3">TOTAL</td>
-              <td class="r">${shipment.total?.toLocaleString() || 0}</td>
-            </tr>
-          </tfoot>
-        </table>
-        <div class="right meta" style="margin-top:2px;">Amount in TZS</div>
+        <div class="line">Customer: ${toUpperCase(shipment.customer) || '—'}</div>
+        <div class="line">Phone: ${shipment.phone || '—'}</div>
+        <div class="line">Dest: ${toUpperCase(shipment.destination) || '—'}</div>
 
-        <div class="payment-line">
-          <span class="payment-badge">${(shipment.payment || 'unpaid').toUpperCase()}</span>
+        <div class="divider-dash"></div>
+
+        <div class="items-block">
+          ${itemsRows}
         </div>
 
-        <div class="divider solid"></div>
+        <!-- Status Line - Left: STATUS, Right: [PAID/UNPAID] -->
+        <div class="status-line">
+          <span class="status-label">STATUS</span>
+          <span class="status-value">[${toUpperCase(shipment.payment || 'unpaid')}]</span>
+        </div>
+
+        <div class="divider-solid"></div>
+
+        <div class="contact-block">
+          <div class="contact-title">Kwa Mawasiliano</div>
+          <div class="contact-title">Zaidi Tupigie:</div>
+          ${contactLines}
+        </div>
+
+        <div class="divider-solid"></div>
 
         <div class="footer">
           <div class="thanks">Thank you for your business!</div>
-          ${companyPhone ? `<div class="phone">Kwa mawasiliano: ${companyPhone}</div>` : ''}
-          <div class="copy">© ${new Date().getFullYear()} ${companyName || 'Manifest System'}</div>
+          <div class="copy">© ${new Date().getFullYear()} ${toUpperCase(companyName || 'Manifest System')}</div>
         </div>
         <script>
           window.onload = function () {
