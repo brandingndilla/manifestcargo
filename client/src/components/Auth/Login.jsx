@@ -12,12 +12,12 @@ export default function Login() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    
+
     if (!email || !password) {
       toast.error('Please enter email and password');
       return;
     }
-    
+
     setLoading(true);
     try {
       await login(email, password);
@@ -68,7 +68,23 @@ export default function Login() {
         <div className="auth-link">
           Don't have an account? <Link to="/register">Register here</Link>
         </div>
+        <div className="auth-note">
+          <i className="fas fa-info-circle"></i> New accounts require admin approval. Once approved, you'll be able to log in here.
+        </div>
       </div>
+
+      <style>{`
+        .auth-note {
+          margin-top: 12px;
+          font-size: 12px;
+          color: #718096;
+          text-align: center;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 6px;
+        }
+      `}</style>
     </div>
   );
 }

@@ -9,6 +9,7 @@ const User = require('./models/User');
 const Manifest = require('./models/Manifest');
 const Shipment = require('./models/Shipment');
 const authMiddleware = require('./middleware/authMiddleware');
+const adminMiddleware = require('./middleware/adminMiddleware');
 
 dotenv.config();
 
@@ -72,20 +73,21 @@ app.post('/api/auth/register', async (req, res) => {
       return res.status(400).json({ error: 'User already exists' });
     }
 
-    const user = new User({ name, email, password, company, companyPhone });
+    const user = new User({
+      name,
+      email,
+      password,
+      company,
+      companyPhone,
+      role: 'user',
+      status: 'pending'
+    });
     await user.save();
 
-    console.log('✅ User created:', user.email);
+    console.log('📝 User registered, pending approval:', user.email);
 
     res.status(201).json({
-      token: generateToken(user._id),
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        company: user.company,
-        companyPhone: user.companyPhone
-      }
+      message: 'Registration successful! Your account is pending admin approval. You will be able to log in once approved.'
     });
   } catch (err) {
     console.error('❌ Register error:', err);
@@ -112,6 +114,14 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(400).json({ error: 'Invalid credentials' });
     }
 
+    if (user.status === 'pending') {
+      return res.status(403).json({ error: 'Your account is pending approval. Please wait for the admin to grant access.' });
+    }
+
+    if (user.status === 'rejected') {
+      return res.status(403).json({ error: 'Your access request was rejected. Contact the admin for more information.' });
+    }
+
     res.json({
       token: generateToken(user._id),
       user: {
@@ -119,7 +129,8 @@ app.post('/api/auth/login', async (req, res) => {
         name: user.name,
         email: user.email,
         company: user.company,
-        companyPhone: user.companyPhone
+        companyPhone: user.companyPhone,
+        role: user.role
       }
     });
   } catch (err) {
@@ -167,6 +178,86 @@ app.put('/api/auth/profile', authMiddleware, async (req, res) => {
     });
   } catch (err) {
     console.error('❌ Update profile error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ============================================
+// ADMIN ROUTES (protected + admin only)
+// ============================================
+
+app.get('/api/admin/users', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const users = await User.find().select('-password').sort({ createdAt: -1 });
+    console.log('👥 Admin fetched all users - Total:', users.length);
+    res.json(users);
+  } catch (err) {
+    console.error('❌ Get users error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.get('/api/admin/users/pending', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const pendingUsers = await User.find({ status: 'pending' }).select('-password').sort({ createdAt: -1 });
+    console.log('⏳ Pending users:', pendingUsers.length);
+    res.json(pendingUsers);
+  } catch (err) {
+    console.error('❌ Get pending users error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.put('/api/admin/users/:id/approve', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      { status: 'approved' },
+      { new: true }
+    ).select('-password');
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    console.log('✅ User approved:', user.email);
+    res.json({ success: true, message: `${user.name} approved successfully`, user });
+  } catch (err) {
+    console.error('❌ Approve user error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.put('/api/admin/users/:id/reject', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      { status: 'rejected' },
+      { new: true }
+    ).select('-password');
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    console.log('🚫 User rejected:', user.email);
+    res.json({ success: true, message: `${user.name} rejected`, user });
+  } catch (err) {
+    console.error('❌ Reject user error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.delete('/api/admin/users/:id', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const user = await User.findByIdAndDelete(req.params.id);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    console.log('🗑️ User deleted:', user.email);
+    res.json({ success: true, message: `${user.name} deleted` });
+  } catch (err) {
+    console.error('❌ Delete user error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });

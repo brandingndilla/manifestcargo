@@ -22,13 +22,13 @@ export default function Register() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    
+
     // Validate passwords match
     if (formData.password !== formData.confirmPassword) {
       toast.error('Passwords do not match');
       return;
     }
-    
+
     // Validate password length
     if (formData.password.length < 6) {
       toast.error('Password must be at least 6 characters');
@@ -37,15 +37,21 @@ export default function Register() {
 
     setLoading(true);
     try {
-      await register({
+      const res = await register({
         company: formData.company,
         companyPhone: formData.companyPhone,
         name: formData.name,
         email: formData.email,
         password: formData.password
       });
-      toast.success('Account created successfully!');
-      navigate('/manifest-manager');
+
+      // Registration no longer logs the user in automatically —
+      // new accounts start "pending" until the admin approves them.
+      toast.success(
+        res?.message || 'Registration successful! Your account is pending admin approval.',
+        { duration: 6000 }
+      );
+      navigate('/login');
     } catch (err) {
       console.error('Registration error:', err);
       const errorMessage = err.response?.data?.error || 'Registration failed. Please try again.';
@@ -136,6 +142,9 @@ export default function Register() {
         </form>
         <div className="auth-link">
           Already have an account? <Link to="/login">Sign in here</Link>
+        </div>
+        <div className="auth-note" style={{ marginTop: '10px', fontSize: '12px', color: '#718096', textAlign: 'center' }}>
+          <i className="fas fa-info-circle"></i> New accounts require admin approval before you can log in.
         </div>
       </div>
     </div>

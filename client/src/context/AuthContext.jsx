@@ -79,26 +79,15 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  // NOTE: Registration no longer logs the user in automatically.
+  // The backend now returns { message: '...' } instead of { token, user },
+  // because new accounts start as "pending" and need admin approval
+  // before they can log in. This function just forwards that message
+  // back to the caller (e.g. Register.js) to display to the user.
   const register = async (userData) => {
     try {
       const res = await api.post('/auth/register', userData);
-      const { token, user } = res.data;
-
-      localStorage.setItem('token', token);
-      api.defaults.headers.common['x-auth-token'] = token;
-      setToken(token);
-      setUser(user);
-
-      if (user.company) {
-        setCompanyName(user.company);
-        localStorage.setItem('companyName', user.company);
-      }
-      if (user.companyPhone) {
-        setCompanyPhone(user.companyPhone);
-        localStorage.setItem('companyPhone', user.companyPhone);
-      }
-
-      return user;
+      return res.data; // { message: 'Registration successful! Your account is pending admin approval.' }
     } catch (err) {
       console.error('Register error:', err);
       throw err;
@@ -138,7 +127,8 @@ export const AuthProvider = ({ children }) => {
     register,
     logout,
     updateProfile,
-    isAuthenticated: !!token
+    isAuthenticated: !!token,
+    isAdmin: user?.role === 'admin'
   };
 
   return (

@@ -7,9 +7,10 @@ import ManifestManager from './components/Manifest/ManifestManager';
 import ManifestItems from './components/Manifest/ManifestItems';
 import ViewManifest from './components/Manifest/ViewManifest';
 import EditManifest from './components/Manifest/EditManifest';
+import AdminDashboard from './pages/AdminDashboard';
 import Layout from './components/Layout/Layout';
 import ProtectedRoute from './components/Auth/ProtectedRoute';
-import './App.css';
+import './App.css'; 
 
 function App() {
   return (
@@ -38,6 +39,10 @@ function App() {
               
               {/* Add Edit Manifest route */}
               <Route path="/edit-manifest/:id" element={<EditManifest />} />
+
+              {/* Admin Dashboard - AdminDashboard itself checks isAdmin
+                  and redirects non-admins back to /manifest-manager */}
+              <Route path="/admin" element={<AdminDashboard />} />
             </Route>
           </Route>
         </Routes>
