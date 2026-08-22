@@ -352,8 +352,8 @@ export default function ManifestManager() {
           }
 
           .contact-block { margin-top: 4px; }
-          .contact-title { font-size: 13px; font-weight: 800; text-transform: uppercase; }
-          .contact-line { font-size: 13px; font-weight: 700; padding: 2px 0; }
+          .contact-title { font-size: 14px; font-weight: 800; text-transform: uppercase; }
+          .contact-line { font-size: 16px; font-weight: 800; padding: 3px 0; }
 
           .footer { text-align: center; margin-top: 10px; }
           .footer .thanks { font-size: 14px; font-weight: 800; }
@@ -364,11 +364,12 @@ export default function ManifestManager() {
         <div class="center">
           <div class="company">${toUpperCase(companyName || 'Manifest System')}</div>
           <div class="subtitle">Way Bill</div>
-          <div class="meta">${dateStr} • ${timeStr}</div>
         </div>
 
         <div class="divider-eq">====================</div>
 
+        <div class="line">Date: ${dateStr}</div>
+        <div class="line">Time: ${timeStr}</div>
         <div class="line">Truck: ${toUpperCase(truckPlate) || '—'}</div>
         <div class="line">Driver: ${toUpperCase(driverName) || '—'}</div>
         <div class="line">Sender: ${toUpperCase(shipment.sender) || '—'}</div>
