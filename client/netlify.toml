@@ -1,17 +1,16 @@
-# netlify.toml - Place at root: cargo-manifest-system/netlify.toml
+# client/netlify.toml
 
 [build]
-  # Navigate to client folder, install deps, and build with Vite
-  command = "cd client && npm install && npm run build"
-  
-  # Vite builds to 'dist' folder
-  publish = "client/dist"
+  # Remove "cd client" - we're already in the client folder
+  command = "npm ci && npm run build"
+  publish = "dist"
 
 # Handle all routes with React Router (prevents 404 on refresh)
 [[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200
+  force = true
 
 # Proxy API requests to your Render backend
 # Replace YOUR_BACKEND_URL with your actual Render URL

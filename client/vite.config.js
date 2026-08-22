@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { copyFileSync, existsSync, mkdirSync } from 'fs';
 import { resolve } from 'path';
-import { copyFileSync } from 'fs';
 
 export default defineConfig({
   plugins: [
@@ -9,14 +9,22 @@ export default defineConfig({
     {
       name: 'copy-redirects',
       closeBundle() {
+        const source = resolve(__dirname, 'public/_redirects');
+        const destDir = resolve(__dirname, 'dist');
+        const dest = resolve(destDir, '_redirects');
+
         try {
-          copyFileSync(
-            resolve(__dirname, 'public/_redirects'),
-            resolve(__dirname, 'dist/_redirects')
-          );
-          console.log('✓ _redirects copied to dist');
-        } catch (e) {
-          console.log('⚠ _redirects file not found, skipping copy');
+          if (!existsSync(destDir)) {
+            mkdirSync(destDir, { recursive: true });
+          }
+          if (existsSync(source)) {
+            copyFileSync(source, dest);
+            console.log('✅ _redirects copied to dist');
+          } else {
+            console.log('⚠️ _redirects not found in public folder');
+          }
+        } catch (error) {
+          console.error('❌ Error copying _redirects:', error.message);
         }
       }
     }
