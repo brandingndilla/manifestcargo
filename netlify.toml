@@ -1,11 +1,11 @@
-# netlify.toml - Place this file in the root of your project
+# netlify.toml - Place at root: cargo-manifest-system/netlify.toml
 
 [build]
-  # Command to build your React app
+  # Navigate to client folder, install deps, and build with Vite
   command = "cd client && npm install && npm run build"
   
-  # Where the build output is located
-  publish = "client/build"
+  # Vite builds to 'dist' folder
+  publish = "client/dist"
 
 # Handle all routes with React Router (prevents 404 on refresh)
 [[redirects]]
@@ -32,7 +32,7 @@
 
 # Cache static assets for better performance
 [[headers]]
-  for = "/static/*"
+  for = "/assets/*"
   [headers.values]
     Cache-Control = "public, max-age=31536000, immutable"
 
@@ -49,5 +49,10 @@
 
 [[headers]]
   for = "*.svg"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "*.webp"
   [headers.values]
     Cache-Control = "public, max-age=31536000, immutable"
