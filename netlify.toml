@@ -1,27 +1,8 @@
 [build]
-  command = "npm run build"
-  publish = "dist"
+command = "npm ci && npm run build"
+publish = "dist"
 
-# Only redirect routes that are NOT files or assets
 [[redirects]]
-  from = "/*"
-  to = "/index.html"
-  status = 200
-  force = true
-  # This condition prevents redirecting actual files
-  [redirects.conditions]
-    condition = "!" 
-    [redirects.conditions.properties]
-      path = "/*/*"
-
-# Alternative simpler way - but ensure assets are excluded
-# Actually let's use the correct approach:
-[[redirects]]
-  from = "/*"
-  to = "/index.html"
-  status = 200
-  # Skip if the request is for a file with extension
-  [redirects.conditions]
-    condition = "!"
-    [redirects.conditions.properties]
-      path = "/*.*"
+from = "/*"
+to = "/index.html"
+status = 200
