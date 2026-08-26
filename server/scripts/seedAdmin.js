@@ -6,7 +6,7 @@ async function seedAdmin() {
   await mongoose.connect(process.env.MONGO_URI);
 
   const email = 'admin@gmail.com';        // ← change this
-  const password = '123456'; // ← change this
+  const password = 'manifest.AI147'; // ← change this
 
   const existing = await User.findOne({ email });
   if (existing) {
