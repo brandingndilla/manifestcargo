@@ -12,17 +12,18 @@ export default function ManifestItems() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedManifestId, setSelectedManifestId] = useState(null);
   const [editingItem, setEditingItem] = useState(null);
-  const [editShipmentIdx, setEditShipmentIdx] = useState(null);
   const [editItemIdx, setEditItemIdx] = useState(null);
   const [editForm, setEditForm] = useState({ name: '', qty: '', rate: '' });
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [showLoadedModal, setShowLoadedModal] = useState(false);
   const [selectedShipment, setSelectedShipment] = useState(null);
-  const [selectedShipmentIdx, setSelectedShipmentIdx] = useState(null);
+  const [selectedItemIdx, setSelectedItemIdx] = useState(null);
   const [loadedQty, setLoadedQty] = useState('');
   const [totalQty, setTotalQty] = useState(0);
   const [editShipmentId, setEditShipmentId] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  // Track payment status per card using a unique key
+  const [cardPaymentStatus, setCardPaymentStatus] = useState({});
 
   useEffect(() => {
     fetchAllManifests();
@@ -80,6 +81,145 @@ export default function ManifestItems() {
     }
   };
 
+  // Applies a set of shipment replacements to the manifest in one bulk call
+  const commitManifestShipmentChanges = async (replacements) => {
+    const keepIds = (manifest.shipments || [])
+      .map(s => s._id)
+      .filter(sid => !replacements.some(r => r.originalId === sid));
+
+    const newIds = replacements.flatMap(r => [r.loadedId, r.unloadedId].filter(Boolean));
+
+    await api.put(`/manifests/${manifest._id}`, {
+      truckPlate: manifest.truckPlate || '',
+      driverName: manifest.driverName || '',
+      supervisor: manifest.supervisor || '',
+      manifestDate: manifest.manifestDate || new Date().toISOString().split('T')[0],
+      status: 'DRAFT',
+      shipments: [...keepIds, ...newIds]
+    });
+  };
+
+  // Loads a portion (or all) of a SINGLE item within a shipment
+  const loadItemPortion = async (shipment, itemIdx, qty, itemTotalQty) => {
+    const items = shipment.items || [];
+    const targetItem = items[itemIdx];
+    const remainingQty = itemTotalQty - qty;
+
+    const loadedItems = qty > 0
+      ? [{ ...targetItem, qty, total: qty * (targetItem.rate || 0) }]
+      : [];
+
+    const remainingItems = items
+      .map((it, idx) => {
+        if (idx !== itemIdx) return it;
+        const rem = itemTotalQty - qty;
+        return { ...it, qty: rem, total: rem * (it.rate || 0) };
+      })
+      .filter(it => (it.qty || 0) > 0);
+
+    await api.delete(`/shipments/${shipment._id}`);
+
+    let loadedId = null;
+    let unloadedId = null;
+
+    if (loadedItems.length > 0) {
+      const res = await api.post('/shipments', {
+        sender: shipment.sender,
+        customer: shipment.customer,
+        phone: shipment.phone,
+        destination: shipment.destination,
+        items: loadedItems,
+        payment: shipment.payment,
+        status: 'loaded',
+        loadedQty: qty,
+        manifestId: manifest._id,
+        saved: true,
+        total: loadedItems.reduce((sum, it) => sum + (it.total || 0), 0)
+      });
+      loadedId = res.data._id;
+    }
+
+    if (remainingItems.length > 0) {
+      const res = await api.post('/shipments', {
+        sender: shipment.sender,
+        customer: shipment.customer,
+        phone: shipment.phone,
+        destination: shipment.destination,
+        items: remainingItems,
+        payment: shipment.payment,
+        status: 'not-loaded',
+        loadedQty: 0,
+        manifestId: manifest._id,
+        saved: false,
+        total: remainingItems.reduce((sum, it) => sum + (it.total || 0), 0)
+      });
+      unloadedId = res.data._id;
+    }
+
+    return { originalId: shipment._id, loadedId, unloadedId, remainingQty };
+  };
+
+  // Performs the load and commits it to the manifest immediately
+  const performLoadItem = async (shipment, itemIdx, qty, itemTotalQty) => {
+    setUpdatingStatus(true);
+    try {
+      const result = await loadItemPortion(shipment, itemIdx, qty, itemTotalQty);
+      await commitManifestShipmentChanges([result]);
+
+      if (result.remainingQty > 0) {
+        toast.success(`${qty} item(s) loaded. ${result.remainingQty} remain unloaded.`);
+      } else {
+        toast.success(`${qty} item(s) loaded.`);
+      }
+
+      setShowLoadedModal(false);
+      setRefreshKey(prev => prev + 1);
+    } catch (err) {
+      console.error('Load error:', err);
+      toast.error(err.response?.data?.error || 'Failed to load item');
+    } finally {
+      setUpdatingStatus(false);
+    }
+  };
+
+  // UNLOAD - flips an already-loaded item's shipment straight back to 'not-loaded'
+  const unloadItem = async (shipment) => {
+    setUpdatingStatus(true);
+    try {
+      await api.put(`/shipments/${shipment._id}`, {
+        ...shipment,
+        status: 'not-loaded',
+        loadedQty: 0
+      });
+      toast.success('Item moved back to unloaded.');
+      setRefreshKey(prev => prev + 1);
+    } catch (err) {
+      console.error('Unload error:', err);
+      toast.error(err.response?.data?.error || 'Failed to unload item');
+    } finally {
+      setUpdatingStatus(false);
+    }
+  };
+
+  // LOAD/UNLOAD BUTTON CLICK - toggles both ways
+  const handleLoadItemClick = (shipment, itemIdx, isLoaded) => {
+    if (isLoaded) {
+      unloadItem(shipment);
+      return;
+    }
+
+    const item = shipment.items?.[itemIdx];
+    if (!item) return;
+    const qty = item.qty || 0;
+
+    // If quantity is 1, load immediately without prompt
+    if (qty === 1) {
+      performLoadItem(shipment, itemIdx, qty, qty);
+    } else {
+      openLoadedModal(shipment, itemIdx);
+    }
+  };
+
   // SAVE MANIFEST - ONLY saves LOADED items, unloaded stay on this page
   const saveManifest = async () => {
     if (!manifest) {
@@ -87,7 +227,6 @@ export default function ManifestItems() {
       return;
     }
 
-    // Get loaded and unloaded shipments
     const allShipments = manifest.shipments || [];
     const loadedShipments = allShipments.filter(s => s.status === 'loaded');
     const unloadedShipments = allShipments.filter(s => s.status !== 'loaded');
@@ -111,7 +250,7 @@ export default function ManifestItems() {
       };
       const newManifestRes = await api.post('/manifests', newManifestData);
 
-      // 2. Update loaded shipments - KEEP status as 'loaded' so they show correctly on view manifest
+      // 2. Update loaded shipments - KEEP status as 'loaded'
       for (const shipment of loadedShipments) {
         await api.put(`/shipments/${shipment._id}`, {
           ...shipment,
@@ -152,22 +291,30 @@ export default function ManifestItems() {
     }
   };
 
-  // DELETE SHIPMENT
-  const deleteShipment = async (shipmentId) => {
-    if (!shipmentId) {
-      toast.error('Invalid shipment ID');
-      return;
-    }
-
-    if (!confirm('Delete this shipment?')) return;
+  // DELETE ITEM - removes just this item
+  const deleteItem = async (shipment, itemIdx) => {
+    if (!confirm('Delete this item?')) return;
 
     try {
-      await api.delete(`/shipments/${shipmentId}`);
-      toast.success('Shipment deleted successfully');
+      const items = shipment.items || [];
+
+      if (items.length <= 1) {
+        await api.delete(`/shipments/${shipment._id}`);
+      } else {
+        const updatedItems = items.filter((_, idx) => idx !== itemIdx);
+        const newTotal = updatedItems.reduce((sum, it) => sum + (it.total || 0), 0);
+        await api.put(`/shipments/${shipment._id}`, {
+          ...shipment,
+          items: updatedItems,
+          total: newTotal
+        });
+      }
+
+      toast.success('Item deleted successfully');
       setRefreshKey(prev => prev + 1);
     } catch (err) {
-      console.error('Delete error:', err);
-      toast.error(err.response?.data?.error || 'Failed to delete shipment');
+      console.error('Delete item error:', err);
+      toast.error(err.response?.data?.error || 'Failed to delete item');
     }
   };
 
@@ -208,14 +355,13 @@ export default function ManifestItems() {
   };
 
   // EDIT ITEM
-  const openEditModal = (shipment, shipmentIdx, itemIdx) => {
+  const openEditModal = (shipment, itemIdx) => {
     if (!shipment || !shipment.items || !shipment.items[itemIdx]) {
       toast.error('Item not found');
       return;
     }
 
     const item = shipment.items[itemIdx];
-    setEditShipmentIdx(shipmentIdx);
     setEditItemIdx(itemIdx);
     setEditShipmentId(shipment._id);
     setEditForm({
@@ -228,7 +374,6 @@ export default function ManifestItems() {
 
   const closeEditModal = () => {
     setEditingItem(null);
-    setEditShipmentIdx(null);
     setEditItemIdx(null);
     setEditShipmentId(null);
     setEditForm({ name: '', qty: '', rate: '' });
@@ -236,8 +381,10 @@ export default function ManifestItems() {
 
   const saveEditItem = async () => {
     const { name, qty, rate } = editForm;
-    if (!name || !qty || !rate) {
-      toast.error('Please fill all fields');
+    
+    // Only name is required, qty and rate are optional
+    if (!name) {
+      toast.error('Please enter item name');
       return;
     }
 
@@ -248,8 +395,9 @@ export default function ManifestItems() {
         return;
       }
 
-      const qtyNum = parseInt(qty);
-      const rateNum = parseFloat(rate);
+      const qtyNum = qty ? parseInt(qty) : 0;
+      const rateNum = rate ? parseFloat(rate) : 0;
+      const total = qtyNum * rateNum;
 
       const updatedItems = shipment.items.map((item, idx) => {
         if (idx === editItemIdx) {
@@ -258,7 +406,7 @@ export default function ManifestItems() {
             name: name,
             qty: qtyNum,
             rate: rateNum,
-            total: qtyNum * rateNum
+            total: total
           };
         }
         return item;
@@ -281,20 +429,20 @@ export default function ManifestItems() {
     }
   };
 
-  // Open Loaded Modal
-  const openLoadedModal = (shipment, shipmentIdx) => {
-    if (!shipment || !shipment.items) return;
-    const total = shipment.items.reduce((sum, item) => sum + (item.qty || 0), 0);
-    setTotalQty(total);
+  // Open Loaded Modal — only used when an item's quantity is more than 1
+  const openLoadedModal = (shipment, itemIdx) => {
+    const item = shipment.items?.[itemIdx];
+    if (!item) return;
+    setTotalQty(item.qty || 0);
     setSelectedShipment(shipment);
-    setSelectedShipmentIdx(shipmentIdx);
+    setSelectedItemIdx(itemIdx);
     setLoadedQty('');
     setShowLoadedModal(true);
   };
 
-  // Confirm Loaded Quantity
+  // Confirm Loaded Quantity (from modal)
   const confirmLoaded = async () => {
-    if (!selectedShipment) return;
+    if (!selectedShipment || selectedItemIdx === null) return;
 
     const qty = parseInt(loadedQty);
     if (isNaN(qty) || qty < 0) {
@@ -312,119 +460,88 @@ export default function ManifestItems() {
       return;
     }
 
-    setUpdatingStatus(true);
-    try {
-      const shipment = selectedShipment;
-      const items = shipment.items || [];
-      const remainingQty = totalQty - qty;
-
-      const loadedItems = items.map(item => {
-        const itemRatio = (item.qty || 0) / totalQty;
-        const loadedItemQty = Math.round(qty * itemRatio);
-        return {
-          ...item,
-          qty: loadedItemQty > 0 ? loadedItemQty : 0,
-          total: loadedItemQty > 0 ? loadedItemQty * (item.rate || 0) : 0
-        };
-      }).filter(item => item.qty > 0);
-
-      const unloadedItems = items.map(item => {
-        const itemRatio = (item.qty || 0) / totalQty;
-        const loadedItemQty = Math.round(qty * itemRatio);
-        const remainingItemQty = (item.qty || 0) - loadedItemQty;
-        return {
-          ...item,
-          qty: remainingItemQty > 0 ? remainingItemQty : 0,
-          total: remainingItemQty > 0 ? remainingItemQty * (item.rate || 0) : 0
-        };
-      }).filter(item => item.qty > 0);
-
-      await api.delete(`/shipments/${shipment._id}`);
-
-      if (loadedItems.length > 0) {
-        const loadedShipmentData = {
-          sender: shipment.sender,
-          customer: shipment.customer,
-          phone: shipment.phone,
-          destination: shipment.destination,
-          items: loadedItems,
-          payment: shipment.payment,
-          status: 'loaded',
-          loadedQty: qty,
-          manifestId: manifest._id,
-          saved: false,
-          total: loadedItems.reduce((sum, item) => sum + (item.total || 0), 0)
-        };
-        await api.post('/shipments', loadedShipmentData);
-      }
-
-      if (unloadedItems.length > 0) {
-        const unloadedShipmentData = {
-          sender: shipment.sender,
-          customer: shipment.customer,
-          phone: shipment.phone,
-          destination: shipment.destination,
-          items: unloadedItems,
-          payment: shipment.payment,
-          status: 'not-loaded',
-          loadedQty: 0,
-          manifestId: manifest._id,
-          saved: false,
-          total: unloadedItems.reduce((sum, item) => sum + (item.total || 0), 0)
-        };
-        await api.post('/shipments', unloadedShipmentData);
-      }
-
-      toast.success(`${qty} items loaded. ${remainingQty} items remain unloaded.`);
-      setShowLoadedModal(false);
-      setRefreshKey(prev => prev + 1);
-    } catch (err) {
-      console.error('Error:', err);
-      toast.error(err.response?.data?.error || 'Failed to update status');
-    } finally {
-      setUpdatingStatus(false);
-    }
+    await performLoadItem(selectedShipment, selectedItemIdx, qty, totalQty);
   };
 
-  // Toggle Paid status
-  const togglePaidStatus = async (shipmentId, currentPayment) => {
+  // Toggle Paid status - independent per card
+  const togglePaidStatus = async (shipmentId, itemIdx, currentPayment, cardKey) => {
     if (updatingStatus) return;
     setUpdatingStatus(true);
 
     try {
       const newPayment = currentPayment === 'paid' ? 'unpaid' : 'paid';
+      
+      // Update the payment status for this specific card only
+      setCardPaymentStatus(prev => ({
+        ...prev,
+        [cardKey]: newPayment
+      }));
+
+      // Update the payment status in the backend
       await api.put(`/shipments/${shipmentId}`, {
         payment: newPayment
       });
-      toast.success(`Shipment marked as ${newPayment === 'paid' ? 'PAID' : 'UNPAID'}`);
+      
+      toast.success(`Item marked as ${newPayment === 'paid' ? 'PAID' : 'UNPAID'}`);
       setRefreshKey(prev => prev + 1);
     } catch (err) {
+      // Revert the local state if API call fails
+      setCardPaymentStatus(prev => ({
+        ...prev,
+        [cardKey]: currentPayment
+      }));
       toast.error('Failed to update payment status');
     } finally {
       setUpdatingStatus(false);
     }
   };
 
+  // MARK ALL LOADED
   const markAllLoaded = async () => {
-    if (!manifest || !manifest.shipments || manifest.shipments.length === 0) {
-      toast.error('No shipments to update.');
+    const unloaded = (manifest?.shipments || []).filter(s => s.status !== 'loaded');
+
+    if (unloaded.length === 0) {
+      toast.error('No unloaded shipments to update.');
       return;
     }
 
-    if (!confirm('Mark all shipments as LOADED?')) return;
+    if (!confirm(`Mark all ${unloaded.length} unloaded shipment(s) as LOADED?`)) return;
 
+    setUpdatingStatus(true);
     try {
-      const updatePromises = manifest.shipments.map(shipment =>
-        api.put(`/shipments/${shipment._id}`, {
-          ...shipment,
-          status: 'loaded'
-        })
-      );
-      await Promise.all(updatePromises);
+      const replacements = [];
+
+      for (const shipment of unloaded) {
+        const items = shipment.items || [];
+        if (items.length === 0) continue;
+
+        await api.delete(`/shipments/${shipment._id}`);
+        const res = await api.post('/shipments', {
+          sender: shipment.sender,
+          customer: shipment.customer,
+          phone: shipment.phone,
+          destination: shipment.destination,
+          items,
+          payment: shipment.payment,
+          status: 'loaded',
+          loadedQty: items.reduce((sum, it) => sum + (it.qty || 0), 0),
+          manifestId: manifest._id,
+          saved: true,
+          total: shipment.total
+        });
+
+        replacements.push({ originalId: shipment._id, loadedId: res.data._id, unloadedId: null });
+      }
+
+      await commitManifestShipmentChanges(replacements);
+
       toast.success('All shipments marked as LOADED!');
       setRefreshKey(prev => prev + 1);
     } catch (err) {
+      console.error('Mark all loaded error:', err);
       toast.error('Failed to update shipments');
+    } finally {
+      setUpdatingStatus(false);
     }
   };
 
@@ -481,8 +598,20 @@ export default function ManifestItems() {
     );
   };
 
-  const filteredLoaded = filterShipments(loadedShipments);
-  const filteredUnloaded = filterShipments(unloadedShipments);
+  // Expand shipments into one card per item
+  const buildItemCards = (shipments, isLoaded) => {
+    const cards = [];
+    shipments.forEach(shipment => {
+      (shipment.items || []).forEach((item, itemIdx) => {
+        cards.push({ shipment, item, itemIdx, isLoaded });
+      });
+    });
+    return cards;
+  };
+
+  const loadedItemCards = buildItemCards(filterShipments(loadedShipments), true);
+  const unloadedItemCards = buildItemCards(filterShipments(unloadedShipments), false);
+  const allItemCards = [...loadedItemCards, ...unloadedItemCards];
 
   const formatDate = (dateString) => {
     if (!dateString) return '—';
@@ -494,26 +623,29 @@ export default function ManifestItems() {
     });
   };
 
-  const renderShipmentCard = (shipment, shipmentIdx) => {
-    const items = shipment.items || [];
-    const isLoaded = shipment.status === 'loaded';
-
+  const renderItemCard = ({ shipment, item, itemIdx, isLoaded }) => {
+    // Create a unique key for this card
+    const cardKey = `${shipment._id}-${itemIdx}`;
+    
+    // Get payment status from local state, fallback to shipment payment
+    const paymentStatus = cardPaymentStatus[cardKey] || shipment.payment || 'unpaid';
+    
     return (
-      <div key={shipment._id || shipmentIdx} className="shipment-card">
+      <div key={cardKey} className="shipment-card">
         <div className="customer-header-row">
           <span className="customer-name">{shipment.customer || '—'}</span>
           <div className="header-action-icons">
             <button
               className="icon-btn icon-edit"
-              onClick={() => openEditModal(shipment, shipmentIdx, 0)}
+              onClick={() => openEditModal(shipment, itemIdx)}
               title="Edit Item"
             >
               <i className="fas fa-edit"></i>
             </button>
             <button
               className="icon-btn icon-delete"
-              onClick={() => deleteShipment(shipment._id)}
-              title="Delete Shipment"
+              onClick={() => deleteItem(shipment, itemIdx)}
+              title="Delete Item"
             >
               <i className="fas fa-trash"></i>
             </button>
@@ -526,14 +658,7 @@ export default function ManifestItems() {
 
         <div className="goods-destination-row">
           <i className="fas fa-box"></i>
-          <span className="goods-item">
-            {items.map((item, idx) => (
-              <span key={idx}>
-                {idx > 0 && ', '}
-                {item.name || '—'}
-              </span>
-            ))}
-          </span>
+          <span className="goods-item">{item.name || '—'}</span>
           <span className="arrow">→</span>
           <span className="destination">{shipment.destination || '—'}</span>
         </div>
@@ -546,32 +671,31 @@ export default function ManifestItems() {
           <span className="a-label">A</span>
         </div>
 
-        {items.map((item, idx) => (
-          <div key={idx} className={`qra-row ${idx > 0 ? 'extra-qra' : ''}`}>
-            <span className="q-value">{item.qty || 0}</span>
-            <span className="divider">|</span>
-            <span className="r-value">{(item.rate || 0).toLocaleString()}</span>
-            <span className="divider">|</span>
-            <span className="a-value">{(item.total || 0).toLocaleString()}</span>
-          </div>
-        ))}
+        <div className="qra-row">
+          <span className="q-value">{item.qty || 0}</span>
+          <span className="divider">|</span>
+          <span className="r-value">{(item.rate || 0).toLocaleString()}</span>
+          <span className="divider">|</span>
+          <span className="a-value">{(item.total || 0).toLocaleString()}</span>
+        </div>
 
         <div className="status-buttons-row">
           <button
             className={`status-btn status-btn-loaded ${isLoaded ? 'active' : 'inactive'}`}
-            onClick={() => openLoadedModal(shipment, shipmentIdx)}
+            onClick={() => handleLoadItemClick(shipment, itemIdx, isLoaded)}
             disabled={updatingStatus}
+            title={isLoaded ? 'Click to move back to unloaded' : `Click to load (${item.qty || 0} items)`}
           >
             <i className="fas fa-box"></i>
             {isLoaded ? 'Loaded' : 'Load'}
           </button>
           <button
-            className={`status-btn status-btn-paid ${shipment.payment === 'paid' ? 'active' : 'inactive'}`}
-            onClick={() => togglePaidStatus(shipment._id, shipment.payment)}
+            className={`status-btn status-btn-paid ${paymentStatus === 'paid' ? 'active' : 'inactive'}`}
+            onClick={() => togglePaidStatus(shipment._id, itemIdx, paymentStatus, cardKey)}
             disabled={updatingStatus}
           >
             <i className="fas fa-money-bill-wave"></i>
-            {shipment.payment === 'paid' ? 'Paid' : 'Unpaid'}
+            {paymentStatus === 'paid' ? 'Paid' : 'Unpaid'}
           </button>
         </div>
       </div>
@@ -675,10 +799,9 @@ export default function ManifestItems() {
 
       <div className="card manifest-items-list">
         <div className="items-cards-container">
-          {filteredLoaded.map((shipment, idx) => renderShipmentCard(shipment, idx))}
-          {filteredUnloaded.map((shipment, idx) => renderShipmentCard(shipment, idx + filteredLoaded.length))}
+          {allItemCards.map(card => renderItemCard(card))}
 
-          {allShipments.length === 0 && (
+          {allItemCards.length === 0 && (
             <div style={{ textAlign: 'center', padding: '40px' }}>
               <i className="fas fa-inbox" style={{ fontSize: '48px', color: '#a0aec0', display: 'block', marginBottom: '12px' }}></i>
               <p style={{ color: '#a0aec0' }}>No shipments in this manifest</p>
@@ -693,7 +816,7 @@ export default function ManifestItems() {
         </div>
       </div>
 
-      {/* Loaded Quantity Modal */}
+      {/* Loaded Quantity Modal — only shown when an item's quantity is more than 1 */}
       {showLoadedModal && selectedShipment && (
         <div className="modal-overlay" onClick={() => setShowLoadedModal(false)}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
@@ -752,31 +875,41 @@ export default function ManifestItems() {
             </div>
             <div className="modal-body">
               <div className="form-group">
-                <label>Item Name</label>
+                <label>Item Name <span style={{ color: '#e74c3c' }}>*</span></label>
                 <input
                   type="text"
                   value={editForm.name}
                   onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                  placeholder="Enter item name"
                 />
               </div>
               <div className="form-row" style={{ gridTemplateColumns: '1fr 1fr' }}>
                 <div className="form-group">
-                  <label>Quantity</label>
+                  <label>Quantity <span style={{ color: '#999', fontSize: '12px' }}>(optional)</span></label>
                   <input
                     type="number"
                     value={editForm.qty}
                     onChange={(e) => setEditForm({ ...editForm, qty: e.target.value })}
+                    placeholder="Quantity"
+                    min="0"
                   />
                 </div>
                 <div className="form-group">
-                  <label>Rate (TZS)</label>
+                  <label>Rate (TZS) <span style={{ color: '#999', fontSize: '12px' }}>(optional)</span></label>
                   <input
                     type="number"
                     value={editForm.rate}
                     onChange={(e) => setEditForm({ ...editForm, rate: e.target.value })}
+                    placeholder="Rate"
+                    min="0"
                   />
                 </div>
               </div>
+              {editForm.qty && editForm.rate && (
+                <div style={{ marginTop: '12px', padding: '10px', background: '#f7fafc', borderRadius: '8px', fontSize: '14px' }}>
+                  <strong>Total Amount:</strong> TZS {(parseInt(editForm.qty) * parseFloat(editForm.rate)).toLocaleString()}
+                </div>
+              )}
             </div>
             <div className="modal-footer">
               <button className="btn-cancel" onClick={closeEditModal}>

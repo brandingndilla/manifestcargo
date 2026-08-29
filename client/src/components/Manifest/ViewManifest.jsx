@@ -14,13 +14,38 @@ export default function ViewManifest() {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const printRef = useRef();
+  const [receiptCounter, setReceiptCounter] = useState(0);
 
   useEffect(() => {
     fetchAllManifests();
+    // Load the last receipt number from localStorage
+    const savedCounter = localStorage.getItem('receiptCounter');
+    if (savedCounter) {
+      setReceiptCounter(parseInt(savedCounter) || 0);
+    } else {
+      const startNumber = Math.floor(Math.random() * 9000) + 1000;
+      setReceiptCounter(startNumber);
+      localStorage.setItem('receiptCounter', startNumber.toString());
+    }
   }, []);
 
   const toUpperCase = (value) => {
     return value ? value.toUpperCase() : '';
+  };
+
+  // Generate a unique receipt number - same as ManifestManager
+  const generateReceiptNumber = () => {
+    const newCounter = receiptCounter + 1;
+    setReceiptCounter(newCounter);
+    localStorage.setItem('receiptCounter', newCounter.toString());
+    
+    const date = new Date();
+    const year = date.getFullYear().toString().slice(-2);
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    
+    const paddedNumber = String(newCounter).padStart(5, '0');
+    return `RCP-${year}${month}${day}-${paddedNumber}`;
   };
 
   const fetchAllManifests = async () => {
@@ -105,7 +130,7 @@ export default function ViewManifest() {
     window.print();
   };
 
-  // ========== UPDATED PRINT RECEIPT FUNCTION - Same as Manifest Manager ==========
+  // ========== UPDATED PRINT RECEIPT FUNCTION WITH UNIQUE NUMBER ==========
   const printReceipt = (shipment) => {
     const receiptWindow = window.open('', '_blank', 'width=302,height=600');
 
@@ -113,6 +138,9 @@ export default function ViewManifest() {
       toast.error('Please allow popups for this site');
       return;
     }
+
+    // Generate unique receipt number
+    const receiptNumber = generateReceiptNumber();
 
     const dateStr = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
     const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
@@ -141,7 +169,7 @@ export default function ViewManifest() {
       <!DOCTYPE html>
       <html>
       <head>
-        <title>Receipt</title>
+        <title>Receipt ${receiptNumber}</title>
         <style>
           @page { size: 58mm auto; margin: 0; }
           * { margin: 0; padding: 0; box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
@@ -158,6 +186,13 @@ export default function ViewManifest() {
           .right { text-align: right; }
           .company { font-size: 20px; font-weight: 800; letter-spacing: 0.5px; text-transform: uppercase; }
           .subtitle { font-size: 16px; font-weight: 800; text-transform: uppercase; margin-top: 2px; }
+          .receipt-number { 
+            font-size: 12px; 
+            font-weight: 700; 
+            color: #555; 
+            margin-top: 2px;
+            letter-spacing: 0.5px;
+          }
           .meta { font-size: 11px; font-weight: 600; color: #333; margin-top: 3px; }
           .divider-eq { margin: 8px 0; font-size: 12px; font-weight: 700; letter-spacing: 1px; white-space: nowrap; overflow: hidden; }
           .divider-dash { border-top: 1.5px dashed #000; margin: 8px 0; }
@@ -208,6 +243,7 @@ export default function ViewManifest() {
         <div class="center">
           <div class="company">${toUpperCase(companyName || 'Manifest System')}</div>
           <div class="subtitle">Way Bill</div>
+          <div class="receipt-number">#${receiptNumber}</div>
         </div>
 
         <div class="divider-eq">====================</div>

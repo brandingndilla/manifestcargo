@@ -30,6 +30,7 @@ export default function ManifestManager() {
   const [isNewManifest, setIsNewManifest] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 3;
+  const [receiptCounter, setReceiptCounter] = useState(0);
 
   // Message modal state
   const [showMessageModal, setShowMessageModal] = useState(false);
@@ -37,6 +38,16 @@ export default function ManifestManager() {
 
   useEffect(() => {
     fetchAllManifests();
+    // Load the last receipt number from localStorage or generate a new one
+    const savedCounter = localStorage.getItem('receiptCounter');
+    if (savedCounter) {
+      setReceiptCounter(parseInt(savedCounter) || 0);
+    } else {
+      // Start from a random number or 1000 to make it look like a proper receipt
+      const startNumber = Math.floor(Math.random() * 9000) + 1000;
+      setReceiptCounter(startNumber);
+      localStorage.setItem('receiptCounter', startNumber.toString());
+    }
   }, []);
 
   const toUpperCase = (value) => {
@@ -47,13 +58,29 @@ export default function ManifestManager() {
     return (value || 0).toFixed(2);
   };
 
+  // Generate a unique receipt number
+  const generateReceiptNumber = () => {
+    const newCounter = receiptCounter + 1;
+    setReceiptCounter(newCounter);
+    localStorage.setItem('receiptCounter', newCounter.toString());
+    
+    const date = new Date();
+    const year = date.getFullYear().toString().slice(-2);
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    
+    // Format: RCP-YYMMDD-XXXXX (e.g., RCP-241225-00001)
+    const paddedNumber = String(newCounter).padStart(5, '0');
+    return `RCP-${year}${month}${day}-${paddedNumber}`;
+  };
+
   const fetchAllManifests = async () => {
     try {
       const res = await api.get('/manifests');
-      
+
       const activeManifests = res.data.filter(m => m.status === 'ACTIVE');
       const draftManifests = res.data.filter(m => m.status === 'DRAFT');
-      
+
       const filterValidManifests = (manifests) => {
         return manifests.filter(m => {
           const hasPlate = m.truckPlate && m.truckPlate.trim() !== '';
@@ -61,24 +88,22 @@ export default function ManifestManager() {
           return hasPlate || hasItems;
         });
       };
-      
+
       const filteredActive = filterValidManifests(activeManifests);
-      const sortedActive = filteredActive.sort((a, b) => 
+      const sortedActive = filteredActive.sort((a, b) =>
         new Date(b.createdAt) - new Date(a.createdAt)
       );
-      
+
       setAllManifests(sortedActive);
-      
+
       if (id) {
         const found = res.data.find(m => m._id === id);
         if (found) {
           setSelectedManifestId(id);
-          setManifest(found);
           loadManifestData(found);
         } else if (draftManifests.length > 0) {
           const draft = draftManifests[0];
           setSelectedManifestId(draft._id);
-          setManifest(draft);
           loadManifestData(draft);
         } else if (sortedActive.length > 0) {
           createNewManifestDirect();
@@ -88,7 +113,6 @@ export default function ManifestManager() {
       } else if (draftManifests.length > 0) {
         const draft = draftManifests[0];
         setSelectedManifestId(draft._id);
-        setManifest(draft);
         loadManifestData(draft);
       } else if (sortedActive.length > 0) {
         createNewManifestDirect();
@@ -120,49 +144,19 @@ export default function ManifestManager() {
       const payload = {
         manifestDate: manifestDate || new Date().toISOString().split('T')[0]
       };
-      
+
       if (truckPlate && truckPlate !== 'GEORGE') payload.truckPlate = toUpperCase(truckPlate);
       if (driverName && driverName !== 'GEORGE') payload.driverName = toUpperCase(driverName);
       if (supervisor && supervisor !== 'GEORGE') payload.supervisor = toUpperCase(supervisor);
-      
+
       const res = await api.post('/manifests', payload);
       setManifest(res.data);
       setIsNewManifest(true);
       setSelectedManifestId(res.data._id);
-      
+
       await fetchAllManifests();
     } catch (err) {
       toast.error('Failed to create new manifest');
-    }
-  };
-
-  const createNewManifest = async () => {
-    if (!confirm('Create a new manifest?')) {
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const payload = {
-        manifestDate: manifestDate || new Date().toISOString().split('T')[0]
-      };
-      if (truckPlate && truckPlate !== 'GEORGE') payload.truckPlate = toUpperCase(truckPlate);
-      if (driverName && driverName !== 'GEORGE') payload.driverName = toUpperCase(driverName);
-      if (supervisor && supervisor !== 'GEORGE') payload.supervisor = toUpperCase(supervisor);
-      
-      const res = await api.post('/manifests', payload);
-      
-      setManifest(res.data);
-      setIsNewManifest(true);
-      setSelectedManifestId(res.data._id);
-      
-      await fetchAllManifests();
-      
-      toast.success('New manifest created!');
-    } catch (err) {
-      toast.error('Failed to create new manifest');
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -222,23 +216,24 @@ export default function ManifestManager() {
 
   const generateMessage = () => {
     const items = goodsRows
-      .filter(row => row.name.trim() && row.qty && row.rate)
+      .filter(row => row.name.trim())
       .map(row => ({
         name: row.name.trim(),
-        qty: parseInt(row.qty),
-        rate: parseFloat(row.rate),
-        total: parseFloat(row.qty) * parseFloat(row.rate)
+        qty: row.qty ? parseInt(row.qty) : null,
+        rate: row.rate ? parseFloat(row.rate) : null,
+        total: parseFloat(row.total) || 0
       }));
 
     const totalAmount = items.reduce((sum, item) => sum + item.total, 0);
-    
+
     let itemsList = '';
     items.forEach((item, index) => {
-      itemsList += `${index + 1}. ${item.name} - Qty: ${item.qty}, TZS ${item.total.toLocaleString()}\n`;
+      const qtyPart = item.qty ? `Qty: ${item.qty}, ` : '';
+      itemsList += `${index + 1}. ${item.name} - ${qtyPart}TZS ${item.total.toLocaleString()}\n`;
     });
 
     const message = `Habari ${customer || 'Mteja'},\n\nTumepokea mzigo wako kama ifuatavyo:\n${itemsList}\n💰 Jumla : TZS ${totalAmount.toLocaleString()}\n📍 Kwenda: ${destination || 'hapa'}\n\nAsante kwa kuchagua huduma zetu!`;
-    
+
     setMessageText(message);
     setShowMessageModal(true);
   };
@@ -248,20 +243,20 @@ export default function ManifestManager() {
       toast.error('Please enter a phone number first.');
       return;
     }
-    
+
     let formattedPhone = phone.replace(/\s/g, '');
     if (!formattedPhone.startsWith('+')) {
       formattedPhone = '+' + formattedPhone;
     }
-    
+
     const smsUrl = `sms:${formattedPhone}?body=${encodeURIComponent(messageText)}`;
     window.open(smsUrl, '_blank');
-    
+
     setShowMessageModal(false);
     toast.success('Message sent successfully!');
   };
 
-  // ========== UPDATED PRINT RECEIPT FUNCTION ==========
+  // ========== UPDATED PRINT RECEIPT FUNCTION WITH UNIQUE NUMBER ==========
   const printReceipt = (shipment) => {
     const receiptWindow = window.open('', '_blank', 'width=302,height=600');
 
@@ -269,6 +264,9 @@ export default function ManifestManager() {
       toast.error('Please allow popups for this site');
       return;
     }
+
+    // Generate unique receipt number
+    const receiptNumber = generateReceiptNumber();
 
     const dateStr = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
     const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
@@ -278,7 +276,7 @@ export default function ManifestManager() {
       <div class="item-row">
         <div class="item-name">${toUpperCase(item.name)}</div>
         <div class="item-values">
-          <span class="qty">QTY: ${item.qty}</span>
+          <span class="qty">${item.qty ? `QTY: ${item.qty}` : ''}</span>
         </div>
       </div>
     `).join('');
@@ -297,7 +295,7 @@ export default function ManifestManager() {
       <!DOCTYPE html>
       <html>
       <head>
-        <title>Receipt</title>
+        <title>Receipt ${receiptNumber}</title>
         <style>
           @page { size: 58mm auto; margin: 0; }
           * { margin: 0; padding: 0; box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
@@ -314,6 +312,13 @@ export default function ManifestManager() {
           .right { text-align: right; }
           .company { font-size: 20px; font-weight: 800; letter-spacing: 0.5px; text-transform: uppercase; }
           .subtitle { font-size: 16px; font-weight: 800; text-transform: uppercase; margin-top: 2px; }
+          .receipt-number { 
+            font-size: 12px; 
+            font-weight: 700; 
+            color: #555; 
+            margin-top: 2px;
+            letter-spacing: 0.5px;
+          }
           .meta { font-size: 11px; font-weight: 600; color: #333; margin-top: 3px; }
           .divider-eq { margin: 8px 0; font-size: 12px; font-weight: 700; letter-spacing: 1px; white-space: nowrap; overflow: hidden; }
           .divider-dash { border-top: 1.5px dashed #000; margin: 8px 0; }
@@ -364,6 +369,7 @@ export default function ManifestManager() {
         <div class="center">
           <div class="company">${toUpperCase(companyName || 'Manifest System')}</div>
           <div class="subtitle">Way Bill</div>
+          <div class="receipt-number">#${receiptNumber}</div>
         </div>
 
         <div class="divider-eq">====================</div>
@@ -427,16 +433,16 @@ export default function ManifestManager() {
     }
 
     const items = goodsRows
-      .filter(row => row.name.trim() && row.qty && row.rate)
+      .filter(row => row.name.trim())
       .map(row => ({
         name: toUpperCase(row.name.trim()),
-        qty: parseInt(row.qty),
-        rate: parseFloat(row.rate),
-        total: parseFloat(row.qty) * parseFloat(row.rate)
+        qty: row.qty ? parseInt(row.qty) : 0,
+        rate: row.rate ? parseFloat(row.rate) : 0,
+        total: parseFloat(row.total) || 0
       }));
 
     if (items.length === 0) {
-      toast.error('Please add at least one valid goods item.');
+      toast.error('Please add at least one item with a name.');
       return;
     }
 
@@ -448,7 +454,7 @@ export default function ManifestManager() {
     setLoading(true);
     try {
       const supervisorValue = supervisor === 'GEORGE' ? '' : toUpperCase(supervisor || '');
-      
+
       await api.put(`/manifests/${manifest._id}`, {
         truckPlate: toUpperCase(truckPlate || ''),
         driverName: toUpperCase(driverName || ''),
@@ -468,8 +474,9 @@ export default function ManifestManager() {
         manifestId: manifest._id
       };
 
-      const res = await api.post('/shipments', shipmentData);
-      
+      await api.post('/shipments', shipmentData);
+
+      // Print receipt with unique number
       printReceipt({
         ...shipmentData,
         total: totalAmount
@@ -483,16 +490,7 @@ export default function ManifestManager() {
       setPaymentStatus(false);
       setLoadingStatus(false);
 
-      toast.success('Shipment added and receipt printed!');
-      
       await fetchAllManifests();
-      
-      if (manifest) {
-        setTruckPlate(toUpperCase(manifest.truckPlate || truckPlate));
-        setDriverName(toUpperCase(manifest.driverName || driverName));
-        const supVal = manifest.supervisor || '';
-        setSupervisor(supVal === 'GEORGE' ? '' : toUpperCase(supVal));
-      }
     } catch (err) {
       console.error('Error adding shipment:', err);
       toast.error(err.response?.data?.error || 'Failed to add shipment');
@@ -515,7 +513,7 @@ export default function ManifestManager() {
   const handleDeleteManifest = async (manifestId, e) => {
     e.stopPropagation();
     if (!confirm('Delete this manifest and all its shipments?')) return;
-    
+
     try {
       await api.delete(`/manifests/${manifestId}`);
       toast.success('Manifest deleted successfully');
@@ -558,10 +556,10 @@ export default function ManifestManager() {
 
   const allShipments = manifest?.shipments || [];
   const totalItems = allShipments.reduce((sum, s) => sum + (s.items?.length || 0), 0) || 0;
-  
+
   const unloadedShipments = allShipments.filter(s => s.status !== 'loaded');
   const unloadedCount = unloadedShipments.reduce((sum, s) => sum + (s.items?.length || 0), 0) || 0;
-  
+
   const formatDate = (dateString) => {
     const date = new Date(dateString);
     return date.toLocaleDateString('en-US', {
@@ -627,6 +625,7 @@ export default function ManifestManager() {
             <span className="subtitle">Create and manage manifests</span>
           </div>
         </div>
+        {/* New Manifest button removed */}
       </div>
 
       {/* Manifest Details */}
@@ -644,28 +643,28 @@ export default function ManifestManager() {
           </div>
           <div className="form-group">
             <label>Truck Plate</label>
-            <input 
-              type="text" 
-              value={truckPlate} 
-              onChange={handleTruckPlateChange} 
+            <input
+              type="text"
+              value={truckPlate}
+              onChange={handleTruckPlateChange}
               placeholder="T 123 ABC"
             />
           </div>
           <div className="form-group">
             <label>Driver Name</label>
-            <input 
-              type="text" 
-              value={driverName} 
-              onChange={handleDriverNameChange} 
+            <input
+              type="text"
+              value={driverName}
+              onChange={handleDriverNameChange}
               placeholder="ENTER DRIVER NAME"
             />
           </div>
           <div className="form-group">
             <label>Supervisor</label>
-            <input 
-              type="text" 
-              value={supervisor} 
-              onChange={handleSupervisorChange} 
+            <input
+              type="text"
+              value={supervisor}
+              onChange={handleSupervisorChange}
               placeholder="ENTER SUPERVISOR NAME"
             />
           </div>
@@ -687,32 +686,38 @@ export default function ManifestManager() {
         <div className="form-row">
           <div className="form-group">
             <label>Sender Name</label>
-            <input 
-              type="text" 
-              value={sender} 
-              onChange={handleSenderChange} 
+            <input
+              type="text"
+              value={sender}
+              onChange={handleSenderChange}
               placeholder="Enter sender name"
             />
           </div>
           <div className="form-group">
             <label>Customer Name</label>
-            <input 
-              type="text" 
-              value={customer} 
-              onChange={handleCustomerChange} 
+            <input
+              type="text"
+              value={customer}
+              onChange={handleCustomerChange}
               placeholder="Enter customer name"
             />
           </div>
           <div className="form-group">
             <label>Phone / Contact</label>
-            <input type="text" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="255 7xx 000 000" />
+            <input
+              type="number"
+              inputMode="numeric"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              placeholder="255 7xx 000 000"
+            />
           </div>
           <div className="form-group">
             <label>Destination</label>
-            <input 
-              type="text" 
-              value={destination} 
-              onChange={handleDestinationChange} 
+            <input
+              type="text"
+              value={destination}
+              onChange={handleDestinationChange}
               placeholder="Enter destination city"
             />
           </div>
@@ -725,13 +730,13 @@ export default function ManifestManager() {
               <i className="fas fa-box" style={{ fontSize: '16px', color: '#4a5568', marginRight: '6px' }}></i>
               Goods List
             </label>
-            <span 
-              className="add-item-link" 
+            <span
+              className="add-item-link"
               onClick={addGoodsRow}
-              style={{ 
-                color: '#a78bfa', 
-                cursor: 'pointer', 
-                fontSize: '13px', 
+              style={{
+                color: '#a78bfa',
+                cursor: 'pointer',
+                fontSize: '13px',
                 fontWeight: '500',
                 display: 'flex',
                 alignItems: 'center',
@@ -754,39 +759,39 @@ export default function ManifestManager() {
               <div className="goods-row-fields">
                 <div className="goods-field">
                   <label>Item Name</label>
-                  <input 
-                    type="text" 
-                    value={row.name} 
-                    onChange={(e) => updateGoodsRow(row.id, 'name', e.target.value)} 
+                  <input
+                    type="text"
+                    value={row.name}
+                    onChange={(e) => updateGoodsRow(row.id, 'name', e.target.value)}
                     placeholder="Item name"
                   />
                 </div>
                 <div className="goods-field">
                   <label>Qty</label>
-                  <input 
-                    type="number" 
-                    value={row.qty} 
-                    onChange={(e) => updateGoodsRow(row.id, 'qty', e.target.value)} 
-                    placeholder="0" 
+                  <input
+                    type="number"
+                    value={row.qty}
+                    onChange={(e) => updateGoodsRow(row.id, 'qty', e.target.value)}
+                    placeholder="0"
                   />
                 </div>
                 <div className="goods-field">
                   <label>Rate</label>
-                  <input 
-                    type="number" 
-                    value={row.rate} 
-                    onChange={(e) => updateGoodsRow(row.id, 'rate', e.target.value)} 
-                    placeholder="0" 
+                  <input
+                    type="number"
+                    value={row.rate}
+                    onChange={(e) => updateGoodsRow(row.id, 'rate', e.target.value)}
+                    placeholder="0"
                   />
                 </div>
                 <div className="goods-field">
                   <label>Total Amount</label>
-                  <input 
-                    type="text" 
-                    value={formatTotal(row.total)} 
-                    placeholder="0.00" 
-                    readOnly 
-                    style={{ 
+                  <input
+                    type="text"
+                    value={formatTotal(row.total)}
+                    placeholder="0.00"
+                    readOnly
+                    style={{
                       background: '#f7fafc',
                       fontWeight: '600',
                       color: '#0a1628'
@@ -795,7 +800,7 @@ export default function ManifestManager() {
                 </div>
                 <div className="goods-field goods-delete-pc">
                   <label>&nbsp;</label>
-                  <span 
+                  <span
                     className="delete-icon-pc"
                     onClick={() => removeGoodsRow(row.id)}
                   >
@@ -803,18 +808,18 @@ export default function ManifestManager() {
                   </span>
                 </div>
               </div>
-              
+
               <div className="goods-row-total-mobile">
                 <div className="goods-total-mobile">
                   <label>Total Amount</label>
-                  <input 
-                    type="text" 
-                    value={formatTotal(row.total)} 
-                    placeholder="0.00" 
-                    readOnly 
+                  <input
+                    type="text"
+                    value={formatTotal(row.total)}
+                    placeholder="0.00"
+                    readOnly
                   />
                 </div>
-                <span 
+                <span
                   className="delete-icon-mobile"
                   onClick={() => removeGoodsRow(row.id)}
                 >
@@ -830,7 +835,7 @@ export default function ManifestManager() {
           <div className="toggle-item">
             <div className="toggle-label-wrapper">
               <span className="toggle-status-label">Payment Status</span>
-              <div 
+              <div
                 className={`toggle-switch ${paymentStatus ? 'active' : ''}`}
                 onClick={() => setPaymentStatus(!paymentStatus)}
               >
@@ -847,7 +852,7 @@ export default function ManifestManager() {
           <div className="toggle-item">
             <div className="toggle-label-wrapper">
               <span className="toggle-status-label">Loaded Status</span>
-              <div 
+              <div
                 className={`toggle-switch ${loadingStatus ? 'active' : ''}`}
                 onClick={() => setLoadingStatus(!loadingStatus)}
               >
@@ -865,14 +870,14 @@ export default function ManifestManager() {
             <button className="btn-add-shipment" onClick={addShipmentToManifest}>
               Add & Print
             </button>
-            <button 
-              className="btn-message" 
-              onClick={generateMessage} 
+            <button
+              className="btn-message"
+              onClick={generateMessage}
               title="Send Message"
             >
-              <img 
-                src={messageIcon} 
-                alt="Message" 
+              <img
+                src={messageIcon}
+                alt="Message"
               />
             </button>
           </div>
@@ -888,7 +893,7 @@ export default function ManifestManager() {
           </span>
         </div>
         <div className="current-session-right">
-          <div 
+          <div
             className="item-count-box"
             onClick={goToBannerManifestItems}
             style={{ cursor: 'pointer' }}
@@ -924,14 +929,14 @@ export default function ManifestManager() {
             <div className="recent-manifests-list">
               {currentManifests.map((m) => {
                 const totalItems = m.totals?.totalItems || 0;
-                
+
                 return (
                   <div key={m._id} className="manifest-summary-card">
                     <div className="manifest-summary-header">
-                      <span 
+                      <span
                         className="manifest-summary-plate"
                         onClick={(e) => handleViewManifest(m._id, e)}
-                        style={{ 
+                        style={{
                           cursor: 'pointer',
                           transition: 'all 0.2s ease',
                           padding: '2px 8px',
@@ -964,14 +969,14 @@ export default function ManifestManager() {
                       </span>
                     </div>
                     <div className="manifest-summary-actions">
-                      <button 
+                      <button
                         className="btn-action btn-edit"
                         onClick={(e) => handleEditManifest(m._id, e)}
                         title="Edit Manifest"
                       >
                         <i className="fas fa-edit"></i>
                       </button>
-                      <button 
+                      <button
                         className="btn-action btn-delete"
                         onClick={(e) => handleDeleteManifest(m._id, e)}
                         title="Delete Manifest"
@@ -987,23 +992,23 @@ export default function ManifestManager() {
             {/* Pagination */}
             {allManifests.length > itemsPerPage && (
               <div className="pagination">
-                <button 
-                  className="pagination-btn" 
-                  onClick={prevPage} 
+                <button
+                  className="pagination-btn"
+                  onClick={prevPage}
                   disabled={currentPage === 1}
                 >
                   <i className="fas fa-chevron-left"></i> Previous
                 </button>
-                
+
                 <div className="pagination-info">
                   <span className="pagination-current">{currentPage}</span>
                   <span>of</span>
                   <span>{totalPages}</span>
                 </div>
-                
-                <button 
-                  className="pagination-btn" 
-                  onClick={nextPage} 
+
+                <button
+                  className="pagination-btn"
+                  onClick={nextPage}
                   disabled={currentPage === totalPages}
                 >
                   Next <i className="fas fa-chevron-right"></i>
