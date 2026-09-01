@@ -1,41 +1,30 @@
-const nodemailer = require('nodemailer');
-
-function getTransporter() {
-  return nodemailer.createTransport({
-    host: process.env.EMAIL_HOST,
-    port: Number(process.env.EMAIL_PORT) || 587,
-    secure: Number(process.env.EMAIL_PORT) === 465, // true only for port 465
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS
-    },
-    family: 4 // force IPv4 — Render's outbound IPv6 to Gmail SMTP is unreliable/blocked
-  });
-}
-
 async function sendPasswordResetEmail(to, resetUrl) {
-  const transporter = getTransporter();
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      from: process.env.EMAIL_FROM || 'onboarding@resend.dev',
+      to,
+      subject: 'Reset your ManifestCargo password',
+      html: `
+        <p>You requested a password reset.</p>
+        <p><a href="${resetUrl}">Click here to reset your password</a></p>
+        <p>This link expires in 1 hour. If you didn't request this, ignore this email.</p>
+      `
+    })
+  });
 
-  // Verify the SMTP connection/auth before attempting to send
-  try {
-    await transporter.verify();
-  } catch (verifyErr) {
-    console.error('❌ SMTP connection/auth failed:', verifyErr.message);
-    throw verifyErr;
+  const data = await response.json();
+
+  if (!response.ok) {
+    console.error('❌ Resend API error:', data);
+    throw new Error(data.message || 'Failed to send email');
   }
 
-  const info = await transporter.sendMail({
-    from: process.env.EMAIL_FROM || process.env.EMAIL_USER,
-    to,
-    subject: 'Reset your ManifestCargo password',
-    html: `
-      <p>You requested a password reset.</p>
-      <p><a href="${resetUrl}">Click here to reset your password</a></p>
-      <p>This link expires in 1 hour. If you didn't request this, ignore this email.</p>
-    `
-  });
-
-  console.log('📧 Email sent:', info.messageId, '| Accepted:', info.accepted, '| Rejected:', info.rejected);
+  console.log('📧 Email sent via Resend, id:', data.id);
 }
 
 module.exports = { sendPasswordResetEmail };
