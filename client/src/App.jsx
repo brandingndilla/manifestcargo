@@ -3,6 +3,8 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { AuthProvider } from './context/AuthContext';
 import Login from './components/Auth/Login';
 import Register from './components/Auth/Register';
+import ForgotPassword from './components/Auth/ForgotPassword';
+import ResetPassword from './components/Auth/ResetPassword';
 import ManifestManager from './components/Manifest/ManifestManager';
 import ManifestItems from './components/Manifest/ManifestItems';
 import ViewManifest from './components/Manifest/ViewManifest';
@@ -24,6 +26,8 @@ function App() {
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
+          <Route path="/forgot-password" element={<ForgotPassword />} />
+          <Route path="/reset-password/:token" element={<ResetPassword />} />
           <Route path="/" element={<Navigate to="/manifest-manager" />} />
           <Route element={<ProtectedRoute />}>
             <Route element={<Layout />}>

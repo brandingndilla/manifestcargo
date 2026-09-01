@@ -4,12 +4,14 @@ const dotenv = require('dotenv');
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 
 const User = require('./models/User');
 const Manifest = require('./models/Manifest');
 const Shipment = require('./models/Shipment');
 const authMiddleware = require('./middleware/authMiddleware');
 const adminMiddleware = require('./middleware/adminMiddleware');
+const { sendPasswordResetEmail } = require('./services/emailService');
 
 dotenv.config();
 
@@ -178,6 +180,63 @@ app.put('/api/auth/profile', authMiddleware, async (req, res) => {
     });
   } catch (err) {
     console.error('❌ Update profile error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.post('/api/auth/forgot-password', async (req, res) => {
+  try {
+    const { email } = req.body;
+    console.log('🔑 Forgot password request:', email);
+
+    const user = await User.findOne({ email });
+
+    // Always respond the same way, whether or not the email exists
+    if (!user) {
+      return res.json({ message: 'If that email exists, a reset link has been sent.' });
+    }
+
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
+
+    user.resetPasswordToken = hashedToken;
+    user.resetPasswordExpires = Date.now() + 60 * 60 * 1000; // 1 hour
+    await user.save();
+
+    const resetUrl = `${process.env.CLIENT_URL}/reset-password/${rawToken}`;
+    await sendPasswordResetEmail(user.email, resetUrl);
+
+    console.log('📧 Reset email sent to:', user.email);
+    res.json({ message: 'If that email exists, a reset link has been sent.' });
+  } catch (err) {
+    console.error('❌ Forgot password error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.post('/api/auth/reset-password/:token', async (req, res) => {
+  try {
+    const { password } = req.body;
+    const hashedToken = crypto.createHash('sha256').update(req.params.token).digest('hex');
+
+    const user = await User.findOne({
+      resetPasswordToken: hashedToken,
+      resetPasswordExpires: { $gt: Date.now() }
+    });
+
+    if (!user) {
+      return res.status(400).json({ error: 'Invalid or expired reset link' });
+    }
+
+    user.password = password; // pre-save hook in models/User.js hashes it
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpires = undefined;
+    await user.save();
+
+    console.log('✅ Password reset for:', user.email);
+    res.json({ message: 'Password reset successful. You can now log in.' });
+  } catch (err) {
+    console.error('❌ Reset password error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });

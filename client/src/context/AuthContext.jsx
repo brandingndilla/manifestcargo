@@ -94,6 +94,26 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  const forgotPassword = async (email) => {
+    try {
+      const res = await api.post('/auth/forgot-password', { email });
+      return res.data;
+    } catch (err) {
+      console.error('Forgot password error:', err);
+      throw err;
+    }
+  };
+
+  const resetPassword = async (token, password) => {
+    try {
+      const res = await api.post(`/auth/reset-password/${token}`, { password });
+      return res.data;
+    } catch (err) {
+      console.error('Reset password error:', err);
+      throw err;
+    }
+  };
+
   const updateProfile = async ({ companyPhone: newPhone }) => {
     try {
       const res = await api.put('/auth/profile', { companyPhone: newPhone });
@@ -125,6 +145,8 @@ export const AuthProvider = ({ children }) => {
     companyPhone,
     login,
     register,
+    forgotPassword,
+    resetPassword,
     logout,
     updateProfile,
     isAuthenticated: !!token,

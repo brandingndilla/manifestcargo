@@ -61,6 +61,9 @@ export default function Login() {
               required
             />
           </div>
+          <div style={{ textAlign: 'right', marginTop: '-8px', marginBottom: '4px' }}>
+            <Link to="/forgot-password" style={{ fontSize: '13px' }}>Forgot password?</Link>
+          </div>
           <button type="submit" className="btn-auth" disabled={loading}>
             <i className="fas fa-sign-in-alt"></i> {loading ? 'Signing in...' : 'Sign In'}
           </button>
