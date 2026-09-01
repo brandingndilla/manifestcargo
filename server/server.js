@@ -14,7 +14,6 @@ const adminMiddleware = require('./middleware/adminMiddleware');
 const { sendPasswordResetEmail } = require('./services/emailService');
 
 dotenv.config();
-
 const app = express();
 const PORT = process.env.PORT || 5000;
 
