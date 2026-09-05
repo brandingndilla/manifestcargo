@@ -12,6 +12,7 @@ const Shipment = require('./models/Shipment');
 const authMiddleware = require('./middleware/authMiddleware');
 const adminMiddleware = require('./middleware/adminMiddleware');
 const { sendPasswordResetEmail } = require('./services/emailService');
+const { sendSMS, sendBulkSMS } = require('./services/smsService');
 
 dotenv.config();
 const app = express();
@@ -22,6 +23,9 @@ app.use(express.json());
 
 console.log('🚀 Starting server...');
 
+// ============================================
+// DATABASE CONNECTION
+// ============================================
 mongoose.connect(process.env.MONGO_URI)
   .then(() => {
     console.log('✅ Connected to MongoDB Atlas');
@@ -32,6 +36,9 @@ mongoose.connect(process.env.MONGO_URI)
     process.exit(1);
   });
 
+// ============================================
+// HELPER FUNCTIONS
+// ============================================
 async function getManifestTotals(manifestId) {
   const manifestShipments = await Shipment.find({ manifestId });
 
@@ -183,33 +190,73 @@ app.put('/api/auth/profile', authMiddleware, async (req, res) => {
   }
 });
 
+// ============================================
+// FIXED: FORGOT PASSWORD ROUTE
+// ============================================
 app.post('/api/auth/forgot-password', async (req, res) => {
   try {
     const { email } = req.body;
-    console.log('🔑 Forgot password request:', email);
+    console.log('🔑 Forgot password request for:', email);
 
-    const user = await User.findOne({ email });
-
-    // Always respond the same way, whether or not the email exists
-    if (!user) {
-      return res.json({ message: 'If that email exists, a reset link has been sent.' });
+    if (!email) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Email is required' 
+      });
     }
 
+    // Find user
+    const user = await User.findOne({ email });
+
+    // Always return same message for security (prevent email enumeration)
+    if (!user) {
+      console.log('⚠️ Password reset requested for non-existent email:', email);
+      return res.status(200).json({ 
+        success: true,
+        message: 'If that email exists, a reset link has been sent.' 
+      });
+    }
+
+    // Generate reset token
     const rawToken = crypto.randomBytes(32).toString('hex');
     const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
 
+    // Save token to user
     user.resetPasswordToken = hashedToken;
     user.resetPasswordExpires = Date.now() + 60 * 60 * 1000; // 1 hour
     await user.save();
 
-    const resetUrl = `${process.env.CLIENT_URL}/reset-password/${rawToken}`;
-    await sendPasswordResetEmail(user.email, resetUrl);
+    console.log('✅ Reset token generated for:', user.email);
 
-    console.log('📧 Reset email sent to:', user.email);
-    res.json({ message: 'If that email exists, a reset link has been sent.' });
-  } catch (err) {
-    console.error('❌ Forgot password error:', err);
-    res.status(500).json({ error: 'Server error' });
+    // Generate reset URL
+    const resetUrl = `${process.env.CLIENT_URL}/reset-password/${rawToken}`;
+    console.log('🔗 Reset URL:', resetUrl);
+
+    // Send email with error handling
+    try {
+      await sendPasswordResetEmail(user.email, resetUrl);
+      console.log('📧 Reset email sent successfully to:', user.email);
+    } catch (emailError) {
+      // Log the error but don't expose it to the client
+      console.error('❌ Failed to send reset email:', emailError.message);
+      // Still return success to the user (security best practice)
+      return res.status(200).json({ 
+        success: true,
+        message: 'If that email exists, a reset link has been sent.' 
+      });
+    }
+
+    res.status(200).json({ 
+      success: true,
+      message: 'If that email exists, a reset link has been sent.' 
+    });
+
+  } catch (error) {
+    console.error('❌ Forgot password error:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Server error. Please try again later.' 
+    });
   }
 });
 
@@ -227,7 +274,7 @@ app.post('/api/auth/reset-password/:token', async (req, res) => {
       return res.status(400).json({ error: 'Invalid or expired reset link' });
     }
 
-    user.password = password; // pre-save hook in models/User.js hashes it
+    user.password = password;
     user.resetPasswordToken = undefined;
     user.resetPasswordExpires = undefined;
     await user.save();
@@ -241,7 +288,7 @@ app.post('/api/auth/reset-password/:token', async (req, res) => {
 });
 
 // ============================================
-// ADMIN ROUTES (protected + admin only)
+// ADMIN ROUTES
 // ============================================
 
 app.get('/api/admin/users', authMiddleware, adminMiddleware, async (req, res) => {
@@ -321,7 +368,7 @@ app.delete('/api/admin/users/:id', authMiddleware, adminMiddleware, async (req, 
 });
 
 // ============================================
-// MANIFEST ROUTES (protected + scoped to req.userId)
+// MANIFEST ROUTES
 // ============================================
 
 app.get('/api/manifests', authMiddleware, async (req, res) => {
@@ -440,7 +487,7 @@ app.delete('/api/manifests/:id', authMiddleware, async (req, res) => {
 });
 
 // ============================================
-// SHIPMENT ROUTES (protected + scoped to req.userId)
+// SHIPMENT ROUTES
 // ============================================
 
 app.get('/api/shipments', authMiddleware, async (req, res) => {
@@ -556,6 +603,76 @@ app.delete('/api/shipments/:id', authMiddleware, async (req, res) => {
 });
 
 // ============================================
+// SMS ROUTES
+// ============================================
+
+// Send single SMS
+app.post('/api/sms/send', authMiddleware, async (req, res) => {
+  try {
+    const { phone, message, customer } = req.body;
+    
+    console.log('📨 SMS Request:', { phone, customer });
+    
+    if (!phone) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Phone number is required' 
+      });
+    }
+    
+    if (!message) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Message is required' 
+      });
+    }
+    
+    const result = await sendSMS(phone, message);
+    
+    if (result.success) {
+      return res.status(200).json({
+        success: true,
+        message: 'SMS sent successfully',
+        data: result
+      });
+    } else {
+      return res.status(500).json({
+        success: false,
+        error: result.error || 'Failed to send SMS'
+      });
+    }
+  } catch (error) {
+    console.error('❌ SMS API error:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Server error'
+    });
+  }
+});
+
+// Test SMS endpoint
+app.post('/api/sms/test', async (req, res) => {
+  try {
+    const { phone, message } = req.body;
+    
+    if (!phone || !message) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Phone and message are required' 
+      });
+    }
+    
+    const result = await sendSMS(phone, message);
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// ============================================
 // TEST ROUTES
 // ============================================
 app.get('/', (req, res) => {
@@ -566,6 +683,9 @@ app.get('/api/test', (req, res) => {
   res.json({ message: 'API is working!', timestamp: new Date().toISOString() });
 });
 
+// ============================================
+// ERROR HANDLING MIDDLEWARE
+// ============================================
 app.use((req, res) => {
   console.log('❌ 404:', req.method, req.url);
   res.status(404).json({ error: 'Route not found: ' + req.url });
@@ -576,13 +696,20 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Something went wrong!' });
 });
 
+// ============================================
+// START SERVER
+// ============================================
 app.listen(PORT, '0.0.0.0', async () => {
   console.log('='.repeat(50));
   console.log('🚀 Server running on port ' + PORT);
   console.log('='.repeat(50));
 
-  const userCount = await User.countDocuments();
-  console.log('📝 Users:', userCount);
-  console.log('📦 Manifests:', await Manifest.countDocuments());
-  console.log('📦 Shipments:', await Shipment.countDocuments());
+  try {
+    const userCount = await User.countDocuments();
+    console.log('📝 Users:', userCount);
+    console.log('📦 Manifests:', await Manifest.countDocuments());
+    console.log('📦 Shipments:', await Shipment.countDocuments());
+  } catch (err) {
+    console.log('⚠️ Database stats not available yet');
+  }
 });

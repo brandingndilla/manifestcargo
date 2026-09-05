@@ -1,0 +1,36 @@
+[2026-09-01T17:22:26.076Z] LOGGED (API Failed) | TO: 255770374380 | MSG: Habari LAMINE,
+
+Tumepokea mzigo wako kama ifuatavy... | RESP: {"error":"All endpoints failed"}
+[2026-09-01T17:23:25.748Z] LOGGED (API Failed) | TO: 255770374380 | MSG: Habari LAMINE,
+
+Tumepokea mzigo wako kama ifuatavy... | RESP: {"error":"All endpoints failed"}
+[2026-09-01T17:36:03.240Z] FAILED | TO: 255770374380 | ENDPOINT: https://karibu.briq.tz/v1/sms/send | MSG: Habari EWFC,
+
+Tumepokea mzigo wako kama ifuatavyo:...
+[2026-09-01T17:39:00.754Z] SENT | TO: 255770374380 | ENDPOINT: https://karibu.briq.tz/v1/otp/request | MSG: Habari EWFC,
+
+Tumepokea mzigo wako kama ifuatavyo:...
+[2026-09-01T17:44:17.347Z] SENT | TO: 255770374380 | ENDPOINT: https://karibu.briq.tz/v1/otp/request | MSG: Habari EWFC,
+
+Tumepokea mzigo wako kama ifuatavyo:...
+[2026-09-01T17:57:06.098Z] ERROR | TO: 255770374380 | ENDPOINT: N/A | MSG: Habari EWFC,
+
+Tumepokea mzigo wako kama ifuatavyo:...
+[2026-09-01T17:57:12.291Z] ERROR | TO: 255770374380 | ENDPOINT: N/A | MSG: Habari EWFC,
+
+Tumepokea mzigo wako kama ifuatavyo:...
+[2026-09-01T17:57:22.291Z] ERROR | TO: 255770374380 | ENDPOINT: N/A | MSG: Habari EWFC,
+
+Tumepokea mzigo wako kama ifuatavyo:...
+[2026-09-01T17:58:42.444Z] ERROR | TO: 255770374380 | ENDPOINT: N/A | MSG: Habari EWFC,
+
+Tumepokea mzigo wako kama ifuatavyo:...
+[2026-09-01T17:58:44.573Z] ERROR | TO: 255770374380 | ENDPOINT: N/A | MSG: Habari EWFC,
+
+Tumepokea mzigo wako kama ifuatavyo:...
+[2026-09-01T18:00:09.222Z] ERROR | TO: 255770374380 | ENDPOINT: N/A | MSG: Habari EWFC,
+
+Tumepokea mzigo wako kama ifuatavyo:...
+[2026-09-01T18:00:39.738Z] ERROR | TO: 255770374380 | ENDPOINT: N/A | MSG: Habari EWFKN,
+
+Tumepokea mzigo wako kama ifuatavyo...

@@ -35,6 +35,7 @@ export default function ManifestManager() {
   // Message modal state
   const [showMessageModal, setShowMessageModal] = useState(false);
   const [messageText, setMessageText] = useState('');
+  const [sendingSMS, setSendingSMS] = useState(false);
 
   useEffect(() => {
     fetchAllManifests();
@@ -214,7 +215,20 @@ export default function ManifestManager() {
     }));
   };
 
+  // ========== UPDATED GENERATE MESSAGE WITH VALIDATION ==========
   const generateMessage = () => {
+    // Validate phone number
+    if (!phone) {
+      toast.error('Please enter a phone number first.');
+      return;
+    }
+
+    // Validate customer name
+    if (!customer) {
+      toast.error('Please enter customer name.');
+      return;
+    }
+
     const items = goodsRows
       .filter(row => row.name.trim())
       .map(row => ({
@@ -223,6 +237,11 @@ export default function ManifestManager() {
         rate: row.rate ? parseFloat(row.rate) : null,
         total: parseFloat(row.total) || 0
       }));
+
+    if (items.length === 0) {
+      toast.error('Please add at least one item.');
+      return;
+    }
 
     const totalAmount = items.reduce((sum, item) => sum + item.total, 0);
 
@@ -238,25 +257,75 @@ export default function ManifestManager() {
     setShowMessageModal(true);
   };
 
-  const sendMessage = () => {
+  // ========== UPDATED SEND MESSAGE VIA BRIQ API ==========
+  const sendMessage = async () => {
     if (!phone) {
       toast.error('Please enter a phone number first.');
       return;
     }
 
-    let formattedPhone = phone.replace(/\s/g, '');
-    if (!formattedPhone.startsWith('+')) {
-      formattedPhone = '+' + formattedPhone;
+    if (sendingSMS) return; // Prevent double submission
+
+    setSendingSMS(true);
+    const toastId = toast.loading('Sending message...');
+
+    try {
+      // Format phone number for Tanzania (255)
+      let formattedPhone = phone.replace(/\s/g, '');
+      
+      // Remove any + sign
+      if (formattedPhone.startsWith('+')) {
+        formattedPhone = formattedPhone.substring(1);
+      }
+      
+      // If starts with 0, replace with 255
+      if (formattedPhone.startsWith('0')) {
+        formattedPhone = '255' + formattedPhone.substring(1);
+      }
+      // If starts with 7 (Tanzanian mobile), add 255
+      else if (formattedPhone.match(/^[7][1-9]/)) {
+        formattedPhone = '255' + formattedPhone;
+      }
+      // If doesn't start with 255, add it
+      else if (!formattedPhone.startsWith('255')) {
+        formattedPhone = '255' + formattedPhone;
+      }
+
+      // Send SMS via API
+      const response = await api.post('/sms/send', {
+        phone: formattedPhone,
+        message: messageText,
+        customer: customer
+      });
+
+      toast.dismiss(toastId);
+
+      if (response.data.success) {
+        toast.success(`✅ Message sent successfully to ${customer}!`);
+        setShowMessageModal(false);
+        setMessageText('');
+      } else {
+        toast.error('❌ Failed to send: ' + (response.data.error || 'Unknown error'));
+      }
+    } catch (err) {
+      toast.dismiss(toastId);
+      console.error('SMS error:', err);
+      
+      if (err.response?.status === 401) {
+        toast.error('❌ Please login again to send messages');
+      } else if (err.response?.status === 429) {
+        toast.error('❌ Too many messages. Please wait a moment.');
+      } else if (err.response?.data?.error) {
+        toast.error(`❌ ${err.response.data.error}`);
+      } else {
+        toast.error('❌ Failed to send message. Please try again.');
+      }
+    } finally {
+      setSendingSMS(false);
     }
-
-    const smsUrl = `sms:${formattedPhone}?body=${encodeURIComponent(messageText)}`;
-    window.open(smsUrl, '_blank');
-
-    setShowMessageModal(false);
-    toast.success('Message sent successfully!');
   };
 
-  // ========== UPDATED PRINT RECEIPT FUNCTION WITH UNIQUE NUMBER ==========
+  // ========== PRINT RECEIPT FUNCTION ==========
   const printReceipt = (shipment) => {
     const receiptWindow = window.open('', '_blank', 'width=302,height=600');
 
@@ -584,17 +653,23 @@ export default function ManifestManager() {
 
   return (
     <div className="manifest-manager-page">
-      {/* Message Modal */}
+      {/* Message Modal - Updated with sending state */}
       {showMessageModal && (
-        <div className="modal-overlay" onClick={() => setShowMessageModal(false)}>
+        <div className="modal-overlay" onClick={() => !sendingSMS && setShowMessageModal(false)}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3><i className="fas fa-comment-dots" style={{ color: '#4da6ff' }}></i> Send Message</h3>
-              <button className="modal-close" onClick={() => setShowMessageModal(false)}>&times;</button>
+              <button 
+                className="modal-close" 
+                onClick={() => !sendingSMS && setShowMessageModal(false)}
+                disabled={sendingSMS}
+              >
+                &times;
+              </button>
             </div>
             <div className="modal-body">
               <div className="modal-recipient">
-                <strong>To:</strong> {phone || 'No phone number provided'}
+                <strong>To:</strong> {customer || 'Customer'} ({phone || 'No phone'})
               </div>
               <div className="modal-message">
                 <textarea
@@ -602,15 +677,32 @@ export default function ManifestManager() {
                   onChange={(e) => setMessageText(e.target.value)}
                   rows="10"
                   className="message-textarea"
+                  disabled={sendingSMS}
                 />
               </div>
             </div>
             <div className="modal-footer">
-              <button className="btn-cancel" onClick={() => setShowMessageModal(false)}>
+              <button 
+                className="btn-cancel" 
+                onClick={() => !sendingSMS && setShowMessageModal(false)}
+                disabled={sendingSMS}
+              >
                 Cancel
               </button>
-              <button className="btn-send" onClick={sendMessage} disabled={!phone}>
-                <i className="fas fa-paper-plane"></i> Send
+              <button 
+                className="btn-send" 
+                onClick={sendMessage} 
+                disabled={!phone || sendingSMS}
+              >
+                {sendingSMS ? (
+                  <>
+                    <i className="fas fa-spinner fa-spin"></i> Sending...
+                  </>
+                ) : (
+                  <>
+                    <i className="fas fa-paper-plane"></i> Send
+                  </>
+                )}
               </button>
             </div>
           </div>
@@ -705,7 +797,7 @@ export default function ManifestManager() {
           <div className="form-group">
             <label>Phone / Contact</label>
             <input
-              type="number"
+              type="text"
               inputMode="numeric"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
