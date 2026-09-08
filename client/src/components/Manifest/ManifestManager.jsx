@@ -185,6 +185,13 @@ export default function ManifestManager() {
     setDestination(toUpperCase(e.target.value));
   };
 
+  // ===== PHONE INPUT - ONLY NUMBERS =====
+  const handlePhoneChange = (e) => {
+    // Remove any non-numeric characters
+    const value = e.target.value.replace(/\D/g, '');
+    setPhone(value);
+  };
+
   const addGoodsRow = () => {
     setGoodsRows([...goodsRows, { id: Date.now(), name: '', qty: '', rate: '', total: 0 }]);
   };
@@ -215,7 +222,7 @@ export default function ManifestManager() {
     }));
   };
 
-  // ========== UPDATED GENERATE MESSAGE WITH COMPANY PHONE ==========
+  // ========== UPDATED GENERATE MESSAGE - NO JUMLA/AMOUNT ==========
   const generateMessage = () => {
     // Validate phone number
     if (!phone) {
@@ -243,18 +250,18 @@ export default function ManifestManager() {
       return;
     }
 
-    const totalAmount = items.reduce((sum, item) => sum + item.total, 0);
-
     let itemsList = '';
     items.forEach((item, index) => {
-      const qtyPart = item.qty ? `Qty: ${item.qty}, ` : '';
-      itemsList += `${index + 1}. ${item.name} - ${qtyPart}TZS ${item.total.toLocaleString()}\n`;
+      // Removed the amount/rate from the message
+      const qtyPart = item.qty ? `Qty: ${item.qty}` : '';
+      itemsList += `${index + 1}. ${item.name}${qtyPart ? ` - ${qtyPart}` : ''}\n`;
     });
 
     const companyPhoneText = companyPhone ? `\nKwa mawasiliano zaidi, wasiliana nasi ${companyPhone}` : '';
     const companyNameText = companyName ? toUpperCase(companyName) : 'Manifest System';
 
-    const message = `Habari ${customer || 'Mteja'},\n\nTumepokea mzigo wako kama ifuatavyo:\n${itemsList}\n💰 Jumla : TZS ${totalAmount.toLocaleString()}\n📍 Kwenda: ${destination || 'hapa'}${companyPhoneText}\n\nAsante - ${companyNameText}`;
+    // Removed the 💰 Jumla line
+    const message = `Habari ${customer || 'Mteja'},\n\nTumepokea mzigo wako kama ifuatavyo:\n${itemsList}\n📍 Kwenda: ${destination || 'hapa'}${companyPhoneText}\n\nAsante - ${companyNameText}`;
 
     setMessageText(message);
     setShowMessageModal(true);
@@ -803,7 +810,7 @@ export default function ManifestManager() {
               type="text"
               inputMode="numeric"
               value={phone}
-              onChange={(e) => setPhone(e.target.value)}
+              onChange={handlePhoneChange}
               placeholder="255 7xx 000 000"
             />
           </div>
