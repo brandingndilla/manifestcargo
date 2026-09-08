@@ -1,10 +1,13 @@
+const dotenv = require('dotenv');
+dotenv.config(); // must run BEFORE any local module (like smsService.js) reads process.env
+
 const express = require('express');
 const cors = require('cors');
-const dotenv = require('dotenv');
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
+const axios = require('axios'); // needed for the /api/sms/test-free route below
 
 const User = require('./models/User');
 const Manifest = require('./models/Manifest');
@@ -12,9 +15,17 @@ const Shipment = require('./models/Shipment');
 const authMiddleware = require('./middleware/authMiddleware');
 const adminMiddleware = require('./middleware/adminMiddleware');
 const { sendPasswordResetEmail } = require('./services/emailService');
-const { sendSMS, sendBulkSMS } = require('./services/smsService');
+const { 
+  sendSMS, 
+  sendBulkSMS, 
+  scheduleSMS,
+  getSMSBalance,
+  getDeliveryReports,
+  getDeliveryReportByMessageId,
+  sendTestSMS,
+  sendShipmentStatusNotification
+} = require('./services/smsService');
 
-dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
@@ -63,6 +74,17 @@ function generateToken(userId) {
   return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: '7d' });
 }
 
+// Turns a business name into a valid NextSMS/GSM alphanumeric sender ID candidate:
+// letters, numbers, and spaces only, max 11 characters (the GSM alphanumeric sender ID limit).
+// This is just a candidate — it still needs to be registered and approved in the NextSMS
+// dashboard before it can actually be used to send SMS (see User.senderIdStatus).
+function generateSenderIdCandidate(businessName) {
+  return businessName
+    .replace(/[^a-zA-Z0-9 ]/g, '')
+    .trim()
+    .slice(0, 11);
+}
+
 // ============================================
 // AUTH ROUTES
 // ============================================
@@ -88,11 +110,14 @@ app.post('/api/auth/register', async (req, res) => {
       company,
       companyPhone,
       role: 'user',
-      status: 'pending'
+      status: 'pending',
+      senderName: generateSenderIdCandidate(company),
+      senderIdStatus: 'pending'
     });
     await user.save();
 
     console.log('📝 User registered, pending approval:', user.email);
+    console.log('📛 Sender ID candidate generated:', user.senderName, '(needs NextSMS approval before use)');
 
     res.status(201).json({
       message: 'Registration successful! Your account is pending admin approval. You will be able to log in once approved.'
@@ -191,7 +216,7 @@ app.put('/api/auth/profile', authMiddleware, async (req, res) => {
 });
 
 // ============================================
-// FIXED: FORGOT PASSWORD ROUTE
+// FORGOT PASSWORD ROUTE
 // ============================================
 app.post('/api/auth/forgot-password', async (req, res) => {
   try {
@@ -205,10 +230,8 @@ app.post('/api/auth/forgot-password', async (req, res) => {
       });
     }
 
-    // Find user
     const user = await User.findOne({ email });
 
-    // Always return same message for security (prevent email enumeration)
     if (!user) {
       console.log('⚠️ Password reset requested for non-existent email:', email);
       return res.status(200).json({ 
@@ -217,29 +240,23 @@ app.post('/api/auth/forgot-password', async (req, res) => {
       });
     }
 
-    // Generate reset token
     const rawToken = crypto.randomBytes(32).toString('hex');
     const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
 
-    // Save token to user
     user.resetPasswordToken = hashedToken;
-    user.resetPasswordExpires = Date.now() + 60 * 60 * 1000; // 1 hour
+    user.resetPasswordExpires = Date.now() + 60 * 60 * 1000;
     await user.save();
 
     console.log('✅ Reset token generated for:', user.email);
 
-    // Generate reset URL
     const resetUrl = `${process.env.CLIENT_URL}/reset-password/${rawToken}`;
     console.log('🔗 Reset URL:', resetUrl);
 
-    // Send email with error handling
     try {
       await sendPasswordResetEmail(user.email, resetUrl);
       console.log('📧 Reset email sent successfully to:', user.email);
     } catch (emailError) {
-      // Log the error but don't expose it to the client
       console.error('❌ Failed to send reset email:', emailError.message);
-      // Still return success to the user (security best practice)
       return res.status(200).json({ 
         success: true,
         message: 'If that email exists, a reset link has been sent.' 
@@ -603,46 +620,166 @@ app.delete('/api/shipments/:id', authMiddleware, async (req, res) => {
 });
 
 // ============================================
-// SMS ROUTES
+// SMS ROUTES - Messaging Service API V2
 // ============================================
 
-// Send single SMS
+// Send single SMS (Authenticated) — falls back to test mode if no real token is set
 app.post('/api/sms/send', authMiddleware, async (req, res) => {
   try {
-    const { phone, message, customer } = req.body;
-    
-    console.log('📨 SMS Request:', { phone, customer });
-    
+    const { phone, message, scheduleDate, scheduleTime, reference } = req.body;
+
+    console.log('📨 SMS Request:', { 
+      phone, 
+      messageLength: message?.length || 0,
+      scheduled: !!(scheduleDate && scheduleTime)
+    });
+
     if (!phone) {
       return res.status(400).json({ 
         success: false, 
         error: 'Phone number is required' 
       });
     }
-    
+
     if (!message) {
       return res.status(400).json({ 
         success: false, 
         error: 'Message is required' 
       });
     }
-    
-    const result = await sendSMS(phone, message);
-    
+
+    // Just check that a token is present — do NOT compare against a specific
+    // hardcoded value, since your real token can legitimately equal any string.
+    const hasToken = !!process.env.MESSAGING_API_TOKEN;
+
+    if (!hasToken) {
+      console.warn('⚠️ No API token configured. Using TEST MODE.');
+
+      const testResult = await sendTestSMS(phone, message);
+
+      return res.status(200).json({
+        success: true,
+        message: '✅ Test SMS sent (No real SMS was sent)',
+        isTest: true,
+        data: testResult.data,
+        note: 'Add MESSAGING_API_TOKEN to .env to send real SMS'
+      });
+    }
+
+    // Real SMS sending with a configured token
+    // Use this company's own registered sender ID if it's been approved on NextSMS;
+    // otherwise fall back to the platform default (from .env / MESSAGING_SENDER_ID)
+    // so sending is never blocked just because a company's sender ID is still pending.
+    const currentUser = await User.findById(req.userId).select('senderName senderIdStatus');
+    const options = {};
+    if (currentUser?.senderIdStatus === 'approved' && currentUser.senderName) {
+      options.sender = currentUser.senderName;
+    }
+    if (reference) options.reference = reference;
+
+    let result;
+    if (scheduleDate && scheduleTime) {
+      result = await scheduleSMS(phone, message, scheduleDate, scheduleTime, options);
+    } else {
+      result = await sendSMS(phone, message, options);
+    }
+
     if (result.success) {
       return res.status(200).json({
         success: true,
-        message: 'SMS sent successfully',
-        data: result
+        message: result.scheduledDate ? 'SMS scheduled successfully' : 'SMS sent successfully',
+        messageId: result.messageId,
+        status: result.status,
+        smsCount: result.smsCount,
+        price: result.price,
+        phone: result.phone,
+        ...(result.scheduledDate && { scheduledDate: result.scheduledDate })
       });
     } else {
       return res.status(500).json({
         success: false,
-        error: result.error || 'Failed to send SMS'
+        error: result.error || 'Failed to send SMS',
+        details: result.details
       });
     }
   } catch (error) {
     console.error('❌ SMS API error:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Server error while sending SMS'
+    });
+  }
+});
+
+// Send bulk SMS (Authenticated)
+app.post('/api/sms/bulk', authMiddleware, async (req, res) => {
+  try {
+    const { recipients, scheduleDate, scheduleTime } = req.body;
+    
+    if (!recipients || !Array.isArray(recipients) || recipients.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Recipients array is required'
+      });
+    }
+
+    if (recipients.length > 100) {
+      return res.status(400).json({
+        success: false,
+        error: 'Maximum 100 recipients per bulk send'
+      });
+    }
+
+    console.log(`📨 Bulk SMS request for ${recipients.length} recipients`);
+
+    const options = {};
+    if (scheduleDate && scheduleTime) {
+      options.date = scheduleDate;
+      options.time = scheduleTime;
+    }
+
+    const result = await sendBulkSMS(recipients, options);
+    
+    return res.status(result.success ? 200 : 500).json(result);
+  } catch (error) {
+    console.error('❌ Bulk SMS API error:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Server error while sending bulk SMS'
+    });
+  }
+});
+
+// Schedule SMS (Authenticated)
+app.post('/api/sms/schedule', authMiddleware, async (req, res) => {
+  try {
+    const { phone, message, date, time, reference } = req.body;
+    
+    if (!phone || !message || !date || !time) {
+      return res.status(400).json({
+        success: false,
+        error: 'Phone, message, date, and time are required'
+      });
+    }
+
+    const result = await scheduleSMS(phone, message, date, time, { reference });
+    
+    if (result.success) {
+      return res.status(200).json({
+        success: true,
+        message: 'SMS scheduled successfully',
+        messageId: result.messageId,
+        scheduledDate: `${date} ${time}`,
+        status: result.status
+      });
+    } else {
+      return res.status(500).json({
+        success: false,
+        error: result.error || 'Failed to schedule SMS'
+      });
+    }
+  } catch (error) {
+    console.error('❌ Schedule SMS error:', error);
     return res.status(500).json({
       success: false,
       error: error.message || 'Server error'
@@ -650,7 +787,145 @@ app.post('/api/sms/send', authMiddleware, async (req, res) => {
   }
 });
 
-// Test SMS endpoint
+// Send shipment status notification (Authenticated)
+app.post('/api/sms/shipment-notification', authMiddleware, async (req, res) => {
+  try {
+    const { phone, customerName, shipmentId, status } = req.body;
+    
+    if (!phone || !customerName || !shipmentId || !status) {
+      return res.status(400).json({
+        success: false,
+        error: 'Phone, customerName, shipmentId, and status are required'
+      });
+    }
+
+    const result = await sendShipmentStatusNotification(
+      phone, 
+      customerName, 
+      shipmentId, 
+      status
+    );
+    
+    if (result.success) {
+      return res.status(200).json({
+        success: true,
+        message: 'Shipment notification sent successfully',
+        messageId: result.messageId,
+        data: result.data
+      });
+    } else {
+      return res.status(500).json({
+        success: false,
+        error: result.error || 'Failed to send shipment notification'
+      });
+    }
+  } catch (error) {
+    console.error('❌ Shipment notification error:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Server error'
+    });
+  }
+});
+
+// Get SMS balance (Authenticated)
+app.get('/api/sms/balance', authMiddleware, async (req, res) => {
+  try {
+    const result = await getSMSBalance();
+    
+    if (result.success) {
+      return res.status(200).json({
+        success: true,
+        balance: result.balance
+      });
+    } else {
+      return res.status(500).json({
+        success: false,
+        error: result.error || 'Failed to check SMS balance'
+      });
+    }
+  } catch (error) {
+    console.error('❌ SMS balance error:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Server error'
+    });
+  }
+});
+
+// Get delivery reports (Authenticated)
+app.get('/api/sms/reports', authMiddleware, async (req, res) => {
+  try {
+    const { size, messageId, sender, channel, sentSince, sentUntil, reference } = req.query;
+    
+    const params = {};
+    if (size) params.size = parseInt(size);
+    if (messageId) params.messageId = messageId;
+    if (sender) params.sender = sender;
+    if (channel) params.channel = channel;
+    if (sentSince) params.sentSince = sentSince;
+    if (sentUntil) params.sentUntil = sentUntil;
+    if (reference) params.reference = reference;
+
+    const result = await getDeliveryReports(params);
+    
+    if (result.success) {
+      return res.status(200).json({
+        success: true,
+        reports: result.reports,
+        count: result.count,
+        total: result.total
+      });
+    } else {
+      return res.status(500).json({
+        success: false,
+        error: result.error || 'Failed to get delivery reports'
+      });
+    }
+  } catch (error) {
+    console.error('❌ Delivery reports error:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Server error'
+    });
+  }
+});
+
+// Get delivery report by message ID (Authenticated)
+app.get('/api/sms/reports/:messageId', authMiddleware, async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    
+    if (!messageId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Message ID is required'
+      });
+    }
+
+    const result = await getDeliveryReportByMessageId(messageId);
+    
+    if (result.success) {
+      return res.status(200).json({
+        success: true,
+        report: result.report
+      });
+    } else {
+      return res.status(404).json({
+        success: false,
+        error: result.error || 'Delivery report not found'
+      });
+    }
+  } catch (error) {
+    console.error('❌ Delivery report error:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Server error'
+    });
+  }
+});
+
+// Test SMS endpoint (No auth required - for testing)
 app.post('/api/sms/test', async (req, res) => {
   try {
     const { phone, message } = req.body;
@@ -662,9 +937,86 @@ app.post('/api/sms/test', async (req, res) => {
       });
     }
     
-    const result = await sendSMS(phone, message);
+    console.log('🧪 Test SMS to:', phone);
+    const result = await sendTestSMS(phone, message);
+    
     return res.json(result);
   } catch (error) {
+    return res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// Debug endpoint — check what SMS env vars the server actually sees (Authenticated)
+app.get('/api/sms/debug', authMiddleware, async (req, res) => {
+  try {
+    const config = {
+      token: process.env.MESSAGING_API_TOKEN ? '✅ Set' : '❌ Missing',
+      tokenValue: process.env.MESSAGING_API_TOKEN ? process.env.MESSAGING_API_TOKEN.substring(0, 10) + '...' : 'N/A',
+      baseUrl: process.env.MESSAGING_BASE_URL || 'Not set',
+      senderId: process.env.MESSAGING_SENDER_ID || '(not set, code will default to POS)'
+    };
+
+    console.log('🔍 SMS Debug Config:', config);
+
+    res.json({
+      success: true,
+      config: config
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Unauthenticated free test send, hitting NextSMS's mobile test endpoint directly
+app.post('/api/sms/test-free', async (req, res) => {
+  try {
+    const { phone, message } = req.body;
+    
+    if (!phone || !message) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Phone and message are required' 
+      });
+    }
+
+    // Format phone number
+    let formattedPhone = phone.replace(/\s/g, '').replace(/^\+/, '');
+    if (!formattedPhone.startsWith('255')) {
+      formattedPhone = formattedPhone.replace(/^0/, '255');
+    }
+
+    console.log('🧪 Sending test SMS (no auth) to:', formattedPhone);
+
+    // Use the test endpoint (no authentication required)
+    const response = await axios.post(
+      `https://messaging-service.co.tz/api/mobile/v2/test/text/single`,
+      {
+        to: formattedPhone,
+        text: message
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        timeout: 15000
+      }
+    );
+
+    console.log('✅ Test SMS sent successfully');
+    return res.json({
+      success: true,
+      data: response.data,
+      phone: formattedPhone,
+      isTest: true,
+      note: 'This is a test SMS. No actual SMS was sent.'
+    });
+
+  } catch (error) {
+    console.error('❌ Test SMS failed:', error);
     return res.status(500).json({ 
       success: false, 
       error: error.message 

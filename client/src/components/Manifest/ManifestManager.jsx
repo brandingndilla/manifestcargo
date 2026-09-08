@@ -215,7 +215,7 @@ export default function ManifestManager() {
     }));
   };
 
-  // ========== UPDATED GENERATE MESSAGE WITH VALIDATION ==========
+  // ========== UPDATED GENERATE MESSAGE WITH COMPANY PHONE ==========
   const generateMessage = () => {
     // Validate phone number
     if (!phone) {
@@ -251,7 +251,10 @@ export default function ManifestManager() {
       itemsList += `${index + 1}. ${item.name} - ${qtyPart}TZS ${item.total.toLocaleString()}\n`;
     });
 
-    const message = `Habari ${customer || 'Mteja'},\n\nTumepokea mzigo wako kama ifuatavyo:\n${itemsList}\n💰 Jumla : TZS ${totalAmount.toLocaleString()}\n📍 Kwenda: ${destination || 'hapa'}\n\nAsante kwa kuchagua huduma zetu!`;
+    const companyPhoneText = companyPhone ? `\nKwa mawasiliano zaidi, wasiliana nasi ${companyPhone}` : '';
+    const companyNameText = companyName ? toUpperCase(companyName) : 'Manifest System';
+
+    const message = `Habari ${customer || 'Mteja'},\n\nTumepokea mzigo wako kama ifuatavyo:\n${itemsList}\n💰 Jumla : TZS ${totalAmount.toLocaleString()}\n📍 Kwenda: ${destination || 'hapa'}${companyPhoneText}\n\nAsante - ${companyNameText}`;
 
     setMessageText(message);
     setShowMessageModal(true);

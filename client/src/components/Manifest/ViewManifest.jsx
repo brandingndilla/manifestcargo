@@ -16,6 +16,13 @@ export default function ViewManifest() {
   const printRef = useRef();
   const [receiptCounter, setReceiptCounter] = useState(0);
 
+  // ===== Arrival SMS preview modal state =====
+  const [showSmsModal, setShowSmsModal] = useState(false);
+  const [smsRecipients, setSmsRecipients] = useState([]); // [{ shipmentId, customer, phone }]
+  const [smsMessage, setSmsMessage] = useState(''); // single shared message for everyone
+  const [sending, setSending] = useState(false);
+  const [sendResults, setSendResults] = useState(null); // { successCount, failCount, details: [] }
+
   useEffect(() => {
     fetchAllManifests();
     // Load the last receipt number from localStorage
@@ -38,12 +45,12 @@ export default function ViewManifest() {
     const newCounter = receiptCounter + 1;
     setReceiptCounter(newCounter);
     localStorage.setItem('receiptCounter', newCounter.toString());
-    
+
     const date = new Date();
     const year = date.getFullYear().toString().slice(-2);
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const day = String(date.getDate()).padStart(2, '0');
-    
+
     const paddedNumber = String(newCounter).padStart(5, '0');
     return `RCP-${year}${month}${day}-${paddedNumber}`;
   };
@@ -300,6 +307,19 @@ export default function ViewManifest() {
     receiptWindow.document.close();
   };
 
+  // Default shared message shown when the modal opens - editable before sending
+  const buildDefaultSharedMessage = () => {
+    const phoneNumber = companyPhone || '';
+    const phoneText = phoneNumber ? `\nKwa mawasiliano zaidi, wasiliana nasi ${phoneNumber}` : '';
+    
+    return (
+      `Habari,\n` +
+      `Tumepokea mzigo wako. Tafadhali fika kuchukua mzigo wako.${phoneText}\n` +
+      `Asante - ${toUpperCase(companyName || 'Manifest System')}`
+    );
+  };
+
+  // Opens the preview modal - one shared message, list of all recipients
   const sendArrivalMessage = () => {
     if (shipments.length === 0) {
       toast.error('No shipments to send messages to.');
@@ -311,30 +331,77 @@ export default function ViewManifest() {
       return;
     }
 
-    const message = document.getElementById('arrivalMessage')?.value || 'Your goods have arrived!';
+    const list = recipients.map(s => ({
+      shipmentId: s._id,
+      customer: s.customer,
+      phone: s.phone
+    }));
 
-    const phoneNumbers = recipients.map(s => `${s.customer}: ${s.phone}`).join('\n');
-    const fullText = `RECIPIENTS:\n${phoneNumbers}\n\nMESSAGE:\n${message}`;
-
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(fullText).then(() => {
-        toast.success('Recipients and message copied to clipboard!');
-      }).catch(() => {
-        copyToClipboardFallback(fullText);
-      });
-    } else {
-      copyToClipboardFallback(fullText);
-    }
+    setSmsRecipients(list);
+    setSmsMessage(buildDefaultSharedMessage());
+    setSendResults(null);
+    setShowSmsModal(true);
   };
 
-  const copyToClipboardFallback = (text) => {
-    const textArea = document.createElement('textarea');
-    textArea.value = text;
-    document.body.appendChild(textArea);
-    textArea.select();
-    document.execCommand('copy');
-    document.body.removeChild(textArea);
-    toast.success('Recipients and message copied to clipboard!');
+  const removeFromRecipients = (shipmentId) => {
+    setSmsRecipients(prev => prev.filter(p => p.shipmentId !== shipmentId));
+  };
+
+  const closeSmsModal = () => {
+    if (sending) return; // don't allow closing mid-send
+    setShowSmsModal(false);
+    setSmsRecipients([]);
+    setSmsMessage('');
+    setSendResults(null);
+  };
+
+  // Actually sends the SAME message to every recipient, after the user confirms in the modal
+  const confirmSendArrival = async () => {
+    if (smsRecipients.length === 0) {
+      toast.error('No recipients left to send to.');
+      return;
+    }
+
+    if (!smsMessage.trim()) {
+      toast.error('Message cannot be empty.');
+      return;
+    }
+
+    setSending(true);
+    setSendResults(null);
+
+    const details = [];
+
+    for (const item of smsRecipients) {
+      try {
+        await api.post('/sms/send', {
+          phone: item.phone,
+          message: smsMessage
+        });
+        details.push({ customer: item.customer, phone: item.phone, ok: true });
+      } catch (err) {
+        details.push({
+          customer: item.customer,
+          phone: item.phone,
+          ok: false,
+          error: err.response?.data?.error || err.message
+        });
+      }
+    }
+
+    const successCount = details.filter(d => d.ok).length;
+    const failCount = details.length - successCount;
+
+    setSendResults({ successCount, failCount, details });
+    setSending(false);
+
+    if (failCount === 0) {
+      toast.success(`Arrival SMS sent to all ${successCount} customer(s)!`);
+    } else if (successCount > 0) {
+      toast.error(`Sent to ${successCount}, failed for ${failCount}. See details below.`);
+    } else {
+      toast.error('Failed to send SMS to any customers.');
+    }
   };
 
   const formatDate = (dateString) => {
@@ -762,6 +829,109 @@ export default function ViewManifest() {
         </div>
       )}
 
+      {/* ===== ARRIVAL SMS PREVIEW MODAL ===== */}
+      {showSmsModal && (
+        <div className="sms-modal-overlay" onClick={closeSmsModal}>
+          <div className="sms-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="sms-modal-header">
+              <h3><i className="fas fa-sms"></i> Send Arrival SMS</h3>
+              <button className="sms-modal-close" onClick={closeSmsModal} disabled={sending}>
+                <i className="fas fa-times"></i>
+              </button>
+            </div>
+
+            <div className="sms-modal-body">
+              <div className="sms-shared-message-block">
+                <span className="sms-block-label">MESSAGE</span>
+                <textarea
+                  className="sms-message-input sms-shared-message-input"
+                  value={smsMessage}
+                  onChange={(e) => setSmsMessage(e.target.value)}
+                  disabled={sending || !!sendResults}
+                  rows={5}
+                />
+              </div>
+
+              <div className="sms-shared-message-block">
+                <span className="sms-block-label">RECIPIENTS ({smsRecipients.length})</span>
+
+                {smsRecipients.length === 0 ? (
+                  <div className="sms-empty">No recipients left.</div>
+                ) : (
+                  <div className="sms-recipients-list">
+                    {smsRecipients.map((item) => {
+                      const result = sendResults?.details.find(d => d.phone === item.phone && d.customer === item.customer);
+                      return (
+                        <div key={item.shipmentId} className={`sms-recipient-row ${result ? (result.ok ? 'sent-ok' : 'sent-fail') : ''}`}>
+                          <div className="sms-recipient-info">
+                            <span className="sms-recipient-name">{item.customer}</span>
+                            <span className="sms-recipient-phone"><i className="fas fa-phone"></i> {item.phone}</span>
+                          </div>
+
+                          {!sending && !sendResults && (
+                            <button
+                              className="sms-remove-btn"
+                              onClick={() => removeFromRecipients(item.shipmentId)}
+                              title="Remove this recipient"
+                            >
+                              <i className="fas fa-trash"></i>
+                            </button>
+                          )}
+
+                          {result && (
+                            <span className={`sms-result-pill ${result.ok ? 'ok' : 'fail'}`}>
+                              {result.ok ? 'Sent' : 'Failed'}
+                            </span>
+                          )}
+
+                          {result && !result.ok && (
+                            <div className="sms-error-note">
+                              <i className="fas fa-exclamation-triangle"></i> {result.error}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {sendResults && (
+              <div className="sms-summary">
+                <span className="sms-summary-ok">
+                  <i className="fas fa-check-circle"></i> {sendResults.successCount} sent
+                </span>
+                {sendResults.failCount > 0 && (
+                  <span className="sms-summary-fail">
+                    <i className="fas fa-times-circle"></i> {sendResults.failCount} failed
+                  </span>
+                )}
+              </div>
+            )}
+
+            <div className="sms-modal-footer">
+              <button className="sms-btn-cancel" onClick={closeSmsModal} disabled={sending}>
+                {sendResults ? 'Close' : 'Cancel'}
+              </button>
+              {!sendResults && (
+                <button
+                  className="sms-btn-send"
+                  onClick={confirmSendArrival}
+                  disabled={sending || smsRecipients.length === 0 || !smsMessage.trim()}
+                >
+                  {sending ? (
+                    <><i className="fas fa-spinner fa-spin"></i> Sending...</>
+                  ) : (
+                    <><i className="fas fa-paper-plane"></i> Send to {smsRecipients.length} customer(s)</>
+                  )}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       <style>{`
         /* ===== PRINT STYLES ===== */
         @media print {
@@ -1089,6 +1259,307 @@ export default function ViewManifest() {
           .view-revenue-item {
             flex: 0 0 calc(50% - 5px) !important;
             scroll-snap-align: start !important;
+          }
+        }
+
+        /* ===== ARRIVAL SMS MODAL ===== */
+        .sms-modal-overlay {
+          position: fixed;
+          top: 0; left: 0; right: 0; bottom: 0;
+          background: rgba(10, 22, 40, 0.55);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 1000;
+          padding: 16px;
+        }
+
+        .sms-modal {
+          background: white;
+          border-radius: 14px;
+          width: 100%;
+          max-width: 560px;
+          max-height: 85vh;
+          display: flex;
+          flex-direction: column;
+          box-shadow: 0 10px 40px rgba(0,0,0,0.25);
+          overflow: hidden;
+        }
+
+        .sms-modal-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 16px 20px;
+          border-bottom: 1px solid #e8ecf0;
+        }
+
+        .sms-modal-header h3 {
+          margin: 0;
+          font-size: 16px;
+          font-weight: 700;
+          color: #0a1628;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+
+        .sms-modal-close {
+          background: none;
+          border: none;
+          font-size: 16px;
+          color: #a0aec0;
+          cursor: pointer;
+          padding: 4px 8px;
+        }
+
+        .sms-modal-close:hover:not(:disabled) {
+          color: #0a1628;
+        }
+
+        .sms-modal-close:disabled {
+          opacity: 0.4;
+          cursor: not-allowed;
+        }
+
+        .sms-modal-body {
+          flex: 1;
+          overflow-y: auto;
+          padding: 14px 20px;
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+        }
+
+        .sms-empty {
+          text-align: center;
+          color: #a0aec0;
+          padding: 30px;
+        }
+
+        .sms-shared-message-block {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+        }
+
+        .sms-block-label {
+          font-size: 11px;
+          font-weight: 700;
+          color: #718096;
+          letter-spacing: 0.5px;
+        }
+
+        .sms-shared-message-input {
+          font-weight: 500;
+        }
+
+        .sms-recipients-list {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+          border: 1px solid #e8ecf0;
+          border-radius: 10px;
+          padding: 8px;
+          max-height: 220px;
+          overflow-y: auto;
+          background: #f9fbfc;
+        }
+
+        .sms-recipient-row {
+          display: flex;
+          flex-wrap: wrap;
+          justify-content: space-between;
+          align-items: center;
+          gap: 8px;
+          padding: 8px 10px;
+          border-radius: 8px;
+          background: white;
+          border: 1px solid #eef1f4;
+        }
+
+        .sms-recipient-row.sent-ok {
+          border-color: #c3e6cb;
+          background: #f4fbf6;
+        }
+
+        .sms-recipient-row.sent-fail {
+          border-color: #f5c6cb;
+          background: #fdf5f6;
+        }
+
+        .sms-recipient-card {
+          border: 1px solid #e8ecf0;
+          border-radius: 10px;
+          padding: 12px;
+          background: #f9fbfc;
+        }
+
+        .sms-recipient-card.sent-ok {
+          border-color: #c3e6cb;
+          background: #f4fbf6;
+        }
+
+        .sms-recipient-card.sent-fail {
+          border-color: #f5c6cb;
+          background: #fdf5f6;
+        }
+
+        .sms-recipient-top {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 8px;
+          gap: 8px;
+        }
+
+        .sms-recipient-info {
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+        }
+
+        .sms-recipient-name {
+          font-weight: 700;
+          font-size: 13.5px;
+          color: #0a1628;
+        }
+
+        .sms-recipient-phone {
+          font-size: 12px;
+          color: #4a5568;
+          display: flex;
+          align-items: center;
+          gap: 5px;
+        }
+
+        .sms-remove-btn {
+          background: none;
+          border: none;
+          color: #e53e3e;
+          cursor: pointer;
+          font-size: 13px;
+          padding: 4px 8px;
+        }
+
+        .sms-result-pill {
+          font-size: 10px;
+          font-weight: 700;
+          text-transform: uppercase;
+          padding: 3px 10px;
+          border-radius: 12px;
+        }
+
+        .sms-result-pill.ok {
+          background: #d4edda;
+          color: #155724;
+        }
+
+        .sms-result-pill.fail {
+          background: #f8d7da;
+          color: #721c24;
+        }
+
+        .sms-message-input {
+          width: 100%;
+          border: 1.5px solid #dde3ea;
+          border-radius: 8px;
+          padding: 8px 10px;
+          font-size: 13px;
+          font-family: inherit;
+          resize: vertical;
+          color: #1a202c;
+        }
+
+        .sms-message-input:focus {
+          outline: none;
+          border-color: #0a1628;
+        }
+
+        .sms-message-input:disabled {
+          background: #f0f4f8;
+          color: #4a5568;
+        }
+
+        .sms-error-note {
+          margin-top: 6px;
+          font-size: 11.5px;
+          color: #c53030;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+        }
+
+        .sms-summary {
+          display: flex;
+          gap: 16px;
+          padding: 10px 20px;
+          border-top: 1px solid #e8ecf0;
+          font-size: 13px;
+          font-weight: 600;
+        }
+
+        .sms-summary-ok {
+          color: #2f855a;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+        }
+
+        .sms-summary-fail {
+          color: #c53030;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+        }
+
+        .sms-modal-footer {
+          display: flex;
+          justify-content: flex-end;
+          gap: 10px;
+          padding: 14px 20px;
+          border-top: 1px solid #e8ecf0;
+        }
+
+        .sms-btn-cancel, .sms-btn-send {
+          padding: 10px 18px;
+          border-radius: 8px;
+          font-size: 13px;
+          font-weight: 700;
+          cursor: pointer;
+          border: 1.5px solid transparent;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+
+        .sms-btn-cancel {
+          background: white;
+          border-color: #e2e8f0;
+          color: #4a5568;
+        }
+
+        .sms-btn-cancel:hover:not(:disabled) {
+          background: #f7fafc;
+        }
+
+        .sms-btn-send {
+          background: #0a1628;
+          color: white;
+        }
+
+        .sms-btn-send:hover:not(:disabled) {
+          background: #1a2940;
+        }
+
+        .sms-btn-cancel:disabled, .sms-btn-send:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
+        }
+
+        @media (max-width: 600px) {
+          .sms-modal {
+            max-height: 92vh;
           }
         }
       `}</style>
