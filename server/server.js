@@ -1142,3 +1142,187 @@ app.listen(PORT, '0.0.0.0', async () => {
     console.log('⚠️ Database stats not available yet');
   }
 });
+
+// ============================================
+// SMS ROUTES - Add this section
+// ============================================
+
+// SMS send function
+async function sendSMS(phone, message) {
+  try {
+    // Format phone number
+    let formattedPhone = phone.replace(/\s/g, '');
+    if (formattedPhone.startsWith('+')) {
+      formattedPhone = formattedPhone.substring(1);
+    }
+    if (formattedPhone.startsWith('0')) {
+      formattedPhone = '255' + formattedPhone.substring(1);
+    } else if (formattedPhone.match(/^[7][1-9]/)) {
+      formattedPhone = '255' + formattedPhone;
+    } else if (!formattedPhone.startsWith('255')) {
+      formattedPhone = '255' + formattedPhone;
+    }
+
+    console.log(`📱 Sending SMS to ${formattedPhone}...`);
+    console.log(`📝 Message: ${message}`);
+
+    // Check for API token
+    const hasToken = !!process.env.MESSAGING_API_TOKEN;
+
+    if (!hasToken) {
+      console.log('⚠️ TEST MODE: SMS would be sent to:', formattedPhone);
+      return {
+        success: true,
+        messageId: 'TEST-' + Date.now(),
+        status: 'sent',
+        phone: formattedPhone,
+        isTest: true,
+        note: 'Add MESSAGING_API_TOKEN to .env to send real SMS'
+      };
+    }
+
+    // Real SMS sending (if you have token configured)
+    try {
+      const axios = require('axios');
+      const response = await axios.post(
+        `${process.env.MESSAGING_BASE_URL || 'https://messaging-service.co.tz/api'}/v2/text/single`,
+        {
+          to: formattedPhone,
+          text: message,
+          sender: process.env.MESSAGING_SENDER_ID || 'POS'
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${process.env.MESSAGING_API_TOKEN}`,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          },
+          timeout: 15000
+        }
+      );
+
+      return {
+        success: true,
+        messageId: response.data?.messageId || 'SMS-' + Date.now(),
+        status: 'sent',
+        phone: formattedPhone,
+        data: response.data
+      };
+    } catch (apiError) {
+      console.error('❌ API Error:', apiError.message);
+      return {
+        success: false,
+        error: apiError.message || 'Failed to send SMS via API'
+      };
+    }
+  } catch (error) {
+    console.error('❌ SMS error:', error.message);
+    return {
+      success: false,
+      error: error.message || 'Failed to send SMS'
+    };
+  }
+}
+
+// Send SMS (Authenticated)
+app.post('/api/sms/send', authMiddleware, async (req, res) => {
+  try {
+    const { phone, message, customer } = req.body;
+
+    console.log('📨 SMS Request:', { phone, customer, messageLength: message?.length });
+
+    if (!phone) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Phone number is required' 
+      });
+    }
+
+    if (!message) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Message is required' 
+      });
+    }
+
+    const result = await sendSMS(phone, message);
+
+    if (result.success) {
+      return res.status(200).json({
+        success: true,
+        message: 'SMS sent successfully',
+        messageId: result.messageId,
+        status: result.status,
+        phone: result.phone,
+        isTest: result.isTest || false
+      });
+    } else {
+      return res.status(500).json({
+        success: false,
+        error: result.error || 'Failed to send SMS'
+      });
+    }
+  } catch (error) {
+    console.error('❌ SMS API error:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Server error while sending SMS'
+    });
+  }
+});
+
+// Test SMS (No auth required)
+app.post('/api/sms/test', async (req, res) => {
+  try {
+    const { phone, message } = req.body;
+    
+    if (!phone || !message) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Phone and message are required' 
+      });
+    }
+    
+    console.log('🧪 Test SMS request:', { phone, message: message.substring(0, 50) });
+    
+    // Format phone number
+    let formattedPhone = phone.replace(/\s/g, '');
+    if (formattedPhone.startsWith('+')) {
+      formattedPhone = formattedPhone.substring(1);
+    }
+    if (formattedPhone.startsWith('0')) {
+      formattedPhone = '255' + formattedPhone.substring(1);
+    } else if (formattedPhone.match(/^[7][1-9]/)) {
+      formattedPhone = '255' + formattedPhone;
+    } else if (!formattedPhone.startsWith('255')) {
+      formattedPhone = '255' + formattedPhone;
+    }
+
+    console.log('📱 Test SMS to:', formattedPhone);
+    console.log('📝 Message:', message);
+
+    return res.json({
+      success: true,
+      messageId: 'TEST-' + Date.now(),
+      note: 'This is a test SMS. No real SMS was sent.',
+      phone: formattedPhone,
+      isTest: true
+    });
+  } catch (error) {
+    console.error('❌ Test SMS error:', error);
+    return res.status(500).json({ 
+      success: false, 
+      error: error.message || 'Server error' 
+    });
+  }
+});
+
+// SMS Health Check (GET - no auth)
+app.get('/api/sms/health', (req, res) => {
+  res.json({
+    status: 'SMS route is working!',
+    timestamp: new Date().toISOString(),
+    hasToken: !!process.env.MESSAGING_API_TOKEN,
+    environment: process.env.NODE_ENV || 'development'
+  });
+});
