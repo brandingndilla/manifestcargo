@@ -384,6 +384,83 @@ app.delete('/api/admin/users/:id', authMiddleware, adminMiddleware, async (req, 
   }
 });
 
+// Approve a company's SMS sender ID — once approved, their SMS will show this
+// as the "from" name instead of the platform default. Do this only after the
+// senderName has actually been registered and approved in the NextSMS dashboard.
+app.put('/api/admin/users/:id/sender-id/approve', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      { senderIdStatus: 'approved' },
+      { new: true }
+    ).select('-password');
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    console.log(`✅ Sender ID approved for ${user.email}: "${user.senderName}"`);
+    res.json({ success: true, message: `Sender ID "${user.senderName}" approved for ${user.company}`, user });
+  } catch (err) {
+    console.error('❌ Approve sender ID error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Reject a company's SMS sender ID candidate — they stay on the platform default
+// until a new candidate is set (e.g. via /api/admin/users/:id/sender-id, below)
+// and approved.
+app.put('/api/admin/users/:id/sender-id/reject', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      { senderIdStatus: 'rejected' },
+      { new: true }
+    ).select('-password');
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    console.log(`🚫 Sender ID rejected for ${user.email}: "${user.senderName}"`);
+    res.json({ success: true, message: `Sender ID "${user.senderName}" rejected for ${user.company}`, user });
+  } catch (err) {
+    console.error('❌ Reject sender ID error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Manually edit a company's sender name candidate — useful when the auto-generated
+// one is a poor fit (truncated awkwardly, or collides with another company's name)
+// and needs a human to pick something better before submitting it to NextSMS.
+app.put('/api/admin/users/:id/sender-id', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { senderName } = req.body;
+
+    if (!senderName || senderName.trim().length === 0) {
+      return res.status(400).json({ error: 'senderName is required' });
+    }
+
+    const sanitized = senderName.replace(/[^a-zA-Z0-9 ]/g, '').trim().slice(0, 11);
+
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      { senderName: sanitized, senderIdStatus: 'pending' },
+      { new: true }
+    ).select('-password');
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    console.log(`📝 Sender ID candidate updated for ${user.email}: "${sanitized}"`);
+    res.json({ success: true, message: `Sender ID candidate set to "${sanitized}"`, user });
+  } catch (err) {
+    console.error('❌ Update sender ID error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // ============================================
 // MANIFEST ROUTES
 // ============================================
